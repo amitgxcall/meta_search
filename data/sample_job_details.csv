@@ -1,0 +1,16 @@
+job_id,job_name,status,description,created_at,updated_at,owner,priority,duration_minutes,cpu_usage_percent
+1001,database_backup,success,"Daily backup of production database",2023-05-10T01:30:00,2023-05-10T01:45:00,system,high,15,32
+1002,data_processing_workflow,failed,"Process customer transaction data",2023-05-10T02:15:00,2023-05-10T02:20:00,john.doe,high,5,91
+1003,log_rotation,success,"Weekly log file rotation and archiving",2023-05-04T00:00:00,2023-05-04T00:01:12,system,low,1,12
+1004,security_scan,running,"Scanning infrastructure for vulnerabilities",2023-05-11T00:00:00,2023-05-11T00:30:00,security_team,medium,30,65
+1005,report_generation,pending,"Generate monthly financial reports",2023-05-11T06:00:00,2023-05-11T06:00:00,finance_bot,medium,0,0
+1006,system_updates,success,"Apply security patches",2023-05-05T03:00:00,2023-05-05T04:30:00,system,critical,90,45
+1007,data_export,failed,"Export customer data for analytics",2023-05-10T12:00:00,2023-05-10T12:45:00,analytics_team,medium,45,78
+1008,email_campaign,success,"Send promotional emails",2023-05-09T09:00:00,2023-05-09T09:30:00,marketing_bot,high,30,25
+1009,database_cleanup,running,"Remove temporary records",2023-05-11T02:00:00,2023-05-11T02:15:00,system,low,15,50
+1010,error_log_analysis,pending,"Analyze system error logs",2023-05-11T07:00:00,2023-05-11T07:00:00,monitoring_team,low,0,0
+1011,backup_verification,success,"Verify integrity of backups",2023-05-10T02:00:00,2023-05-10T02:10:00,system,medium,10,18
+1012,server_restart,failed,"Scheduled server restart for maintenance",2023-05-10T23:00:00,2023-05-10T23:05:00,ops_team,high,5,99
+1013,database_indexing,success,"Optimize database indexes",2023-05-08T02:00:00,2023-05-08T03:30:00,db_admin,medium,90,70
+1014,cache_cleanup,success,"Clear application caches",2023-05-10T00:00:00,2023-05-10T00:01:00,system,low,1,10
+1015,user_sync,running,"Synchronize user data with external system",2023-05-11T01:00:00,2023-05-11T01:30:00,integration_bot,medium,30,40

@@ -1,0 +1,65 @@
+{
+    "jobs": [
+      {
+        "id": 2001,
+        "name": "etl_pipeline",
+        "status": "failed",
+        "description": "Extract, transform and load data pipeline",
+        "created_at": "2023-05-10T03:00:00",
+        "updated_at": "2023-05-10T03:30:00",
+        "owner": "data_team",
+        "priority": "high",
+        "duration_minutes": 30,
+        "error_message": "Connection timeout to source database"
+      },
+      {
+        "id": 2002,
+        "name": "recommendation_training",
+        "status": "success",
+        "description": "Train recommendation model",
+        "created_at": "2023-05-09T12:00:00",
+        "updated_at": "2023-05-09T14:00:00",
+        "owner": "ml_team",
+        "priority": "medium",
+        "duration_minutes": 120,
+        "metrics": {
+          "accuracy": 0.87,
+          "f1_score": 0.82
+        }
+      },
+      {
+        "id": 2003,
+        "name": "api_health_check",
+        "status": "running",
+        "description": "Check all API endpoints",
+        "created_at": "2023-05-11T08:00:00",
+        "updated_at": "2023-05-11T08:00:00",
+        "owner": "devops",
+        "priority": "low",
+        "duration_minutes": 0
+      },
+      {
+        "id": 2004,
+        "name": "database_backup_cloud",
+        "status": "success",
+        "description": "Backup database to cloud storage",
+        "created_at": "2023-05-10T01:00:00",
+        "updated_at": "2023-05-10T01:20:00",
+        "owner": "system",
+        "priority": "critical",
+        "duration_minutes": 20
+      },
+      {
+        "id": 2005,
+        "name": "log_analysis",
+        "status": "failed",
+        "description": "Analyze application logs for errors",
+        "created_at": "2023-05-10T10:00:00",
+        "updated_at": "2023-05-10T10:05:00",
+        "owner": "monitoring_team",
+        "priority": "medium",
+        "duration_minutes": 5,
+        "error_message": "Out of memory error"
+      }
+    ]
+  }
