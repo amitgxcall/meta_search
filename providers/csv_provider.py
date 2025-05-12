@@ -194,6 +194,28 @@ class CSVProvider(DataProvider):
         Returns:
             Result of comparison
         """
+        # Handle type conversion for numeric comparisons
+        if op in ["gt", "gte", "lt", "lte"]:
+            # Try to convert string values to numbers for comparison
+            if isinstance(record_value, str) and not isinstance(op_value, str):
+                try:
+                    if '.' in record_value:
+                        record_value = float(record_value)
+                    else:
+                        record_value = int(record_value)
+                except ValueError:
+                    # If conversion fails, always return False for numeric comparisons
+                    return False
+            elif isinstance(op_value, str) and not isinstance(record_value, str):
+                try:
+                    if '.' in op_value:
+                        op_value = float(op_value)
+                    else:
+                        op_value = int(op_value)
+                except ValueError:
+                    return False
+        
+        # Now perform the comparison
         if op == "gt":
             return record_value > op_value
         elif op == "gte":
@@ -203,7 +225,7 @@ class CSVProvider(DataProvider):
         elif op == "lte":
             return record_value <= op_value
         elif op == "contains" and isinstance(record_value, str):
-            return op_value.lower() in record_value.lower()
+            return str(op_value).lower() in record_value.lower()
         else:
             return False
     

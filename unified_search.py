@@ -5,6 +5,8 @@ Unified interface for the job search system.
 import os
 from typing import Dict, List, Any, Optional, Tuple, Union
 
+from meta_search.providers import get_provider_class, PROVIDER_TYPES
+
 from .utils.field_mapping import FieldMapping
 from .search.engine import SearchEngine
 from .providers.base import DataProvider

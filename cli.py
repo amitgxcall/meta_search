@@ -7,8 +7,16 @@ import json
 import sys
 from typing import Dict, List, Any, Optional
 
-from .utils.field_mapping import FieldMapping
-from .unified_search import UnifiedJobSearch
+import sys
+import os
+# Add the parent directory to system path
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+# Then change relative imports to package imports
+from meta_search.utils.field_mapping import FieldMapping
+
+
+from meta_search.unified_search import UnifiedJobSearch
 
 def parse_args():
     """Parse command line arguments."""

@@ -1,7 +1,7 @@
 import unittest
 import os
 import tempfile
-from job_search import UnifiedJobSearch, FieldMapping
+from meta_search import UnifiedJobSearch, FieldMapping
 
 class TestUnifiedSearch(unittest.TestCase):
     

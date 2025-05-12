@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: meta_search
+Version: 0.1.0
+Summary: A flexible search system for job data
+Author: Your Name
+Requires-Dist: pandas>=1.3.0
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: scikit-learn>=1.0.0
+Requires-Dist: faiss-cpu>=1.7.0
+Requires-Dist: tqdm>=4.60.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: summary

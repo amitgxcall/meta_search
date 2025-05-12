@@ -58,7 +58,7 @@ python search_cli.py --data-source tasks.csv --custom-fields --id-field task_id 
 ### Python API
 
 ```python
-from job_search import UnifiedJobSearch, FieldMapping
+from meta_search import UnifiedJobSearch, FieldMapping
 
 # Basic usage with auto-detection
 search = UnifiedJobSearch("job_details.csv")
@@ -95,12 +95,12 @@ The system supports various query types:
 
 ### Adding a New Data Provider
 
-1. Subclass `DataProvider` from `job_search.data_provider`
+1. Subclass `DataProvider` from `meta_search.data_provider`
 2. Implement all required methods
-3. Register in `job_search.providers.__init__.py`
+3. Register in `meta_search.providers.__init__.py`
 
 ```python
-from job_search.data_provider import DataProvider
+from meta_search.data_provider import DataProvider
 
 class MyCustomProvider(DataProvider):
     def __init__(self, data_source, field_mapping=None):
@@ -119,7 +119,7 @@ class MyCustomProvider(DataProvider):
 
 MIT
 
-job_search/
+meta_search/
 │
 ├── __init__.py
 ├── providers/
