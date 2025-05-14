@@ -1,14 +1,51 @@
 #!/usr/bin/env python3
 """
-Simple hybrid search CLI that works correctly with your data.
+Command-line interface for meta_search.
 """
 
 import argparse
 import sys
 import os
 import re
-import csv
-from collections import defaultdict
+
+# Add the parent directory to sys.path to allow absolute imports
+# This lets you run the script directly with python3 cli.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Now use package imports without the meta_search prefix
+from utils.field_mapping import FieldMapping
+from search.engine import SearchEngine
+from providers.base import DataProvider
+from providers.csv_provider import CSVProvider
+from providers.sqlite_provider import SQLiteProvider
+from providers.hybrid_provider import HybridProvider
+
+def extract_id_from_query(query):
+    """
+    Extracts an ID from a query string if it appears to be an ID search.
+    
+    Args:
+        query: The search query
+        
+    Returns:
+        The ID string if found, None otherwise
+    """
+    # Pattern for "id X", "ID: X", "job id X", etc.
+    id_patterns = [
+        r'(?:^|\s)id\s*[:=]?\s*(\d+)',
+        r'(?:^|\s)job\s+id\s*[:=]?\s*(\d+)',
+        r'(?:^|\s)job[-_]id\s*[:=]?\s*(\d+)',
+        r'(?:^|\s)#(\d+)',
+        r'(?:^|\s)number\s*[:=]?\s*(\d+)',
+        r'(?:^|\s)(\d{4,})\s*$'  # Standalone number (at least 4 digits)
+    ]
+    
+    for pattern in id_patterns:
+        match = re.search(pattern, query, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    return None
 
 def parse_args():
     """Parse command line arguments."""
@@ -21,355 +58,133 @@ def parse_args():
                         help='Field to use as name')
     parser.add_argument('--query', required=True,
                         help='Search query')
+    parser.add_argument('--provider', 
+                        choices=['csv', 'sqlite', 'json', 'hybrid'],
+                        default='hybrid',
+                        help='Provider type to use (default: hybrid)')
+    parser.add_argument('--vector-weight', type=float, default=0.5,
+                        help='Weight for vector search when using hybrid provider (0-1)')
+    parser.add_argument('--vector-index', 
+                        help='Path to vector index file (for hybrid provider)')
+    parser.add_argument('--build-index', action='store_true',
+                        help='Force rebuild of vector index (for hybrid provider)')
+    parser.add_argument('--table-name',
+                        help='Table name for SQLite provider')
     return parser.parse_args()
-
-def load_csv_data(file_path):
-    """Load data from a CSV file."""
-    try:
-        with open(file_path, 'r', newline='', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            return list(reader)
-    except Exception as e:
-        print(f"Error loading CSV file: {e}")
-        return []
-
-def extract_id_from_query(query):
-    """Extract an ID from a query string."""
-    # Look for common ID patterns
-    id_pattern = re.compile(r".*id\s*[:=]?\s*(\w+[-]?\w*)", re.IGNORECASE)
-    match = id_pattern.search(query)
-    if match:
-        return match.group(1)
-    return None
-
-def find_exact_id_match(data, id_value, id_field):
-    """Find an exact match for the given ID."""
-    for item in data:
-        if str(item.get(id_field, '')).lower() == id_value.lower():
-            return item
-    return None
-
-def text_search(data, query, id_field, name_field):
-    """
-    Perform text search with phrase prioritization.
-    """
-    query = query.lower()
-    query_terms = query.lower().split()
-    results = []
-    
-    # Define score levels
-    PHRASE_MATCH = 100    # Exact phrase match
-    ADJACENT_MATCH = 50   # Adjacent words match
-    WORD_MATCH = 10       # Individual words match
-    
-    for item in data:
-        score = 0
-        matched_fields = defaultdict(list)
-        all_text = ""
-        
-        # Combine text fields for whole-document matching
-        for field, value in item.items():
-            if value and isinstance(value, str):
-                value_lower = value.lower()
-                all_text += " " + value_lower
-                
-                # Check for exact phrase match (highest priority)
-                if query in value_lower:
-                    score += PHRASE_MATCH
-                    matched_fields[field].append(f"PHRASE: '{query}'")
-                
-                # Check for adjacent terms (medium priority)
-                if len(query_terms) >= 2:
-                    for i in range(len(query_terms) - 1):
-                        two_words = f"{query_terms[i]} {query_terms[i+1]}"
-                        if two_words in value_lower:
-                            score += ADJACENT_MATCH
-                            matched_fields[field].append(f"ADJACENT: '{two_words}'")
-                
-                # Check for individual terms (lowest priority)
-                for term in query_terms:
-                    if term in value_lower:
-                        score += WORD_MATCH
-                        matched_fields[field].append(f"WORD: '{term}'")
-        
-        if score > 0:
-            # Determine best match type
-            match_type = "TEXT MATCH"
-            if any("PHRASE" in match for matches in matched_fields.values() for match in matches):
-                match_type = "EXACT PHRASE MATCH"
-            elif any("ADJACENT" in match for matches in matched_fields.values() for match in matches):
-                match_type = "CONSECUTIVE WORDS MATCH"
-            
-            # Add to results
-            results.append({
-                'item': item,
-                'score': score,
-                'match_type': match_type,
-                'matched_fields': dict(matched_fields)
-            })
-    
-    # Sort by score (descending)
-    results.sort(key=lambda x: x['score'], reverse=True)
-    return results
-
-def vector_search(data, query, id_field, name_field):
-    """
-    Simulate vector search using keyword expansion for semantic matching.
-    This is a simple demonstration of how vector search would work.
-    """
-    # Define semantic expansions for common terms
-    semantic_map = {
-        "security": ["protection", "firewall", "defense", "guard", "shield", "safeguard"],
-        "threat": ["risk", "danger", "hazard", "vulnerability", "attack", "exploit"],
-        "detection": ["identify", "discover", "locate", "find", "recognize", "sense", "spot"],
-        "user": ["account", "profile", "identity", "member", "person", "individual"],
-        "data": ["information", "records", "files", "documents", "content", "storage"],
-        "sync": ["synchronize", "update", "refresh", "replicate", "mirror", "coordinate"],
-        "process": ["task", "job", "workflow", "operation", "activity", "procedure"],
-        "monitor": ["watch", "observe", "track", "check", "survey", "oversee"],
-        "system": ["platform", "infrastructure", "framework", "environment", "network"],
-        "backup": ["archive", "copy", "duplicate", "replicate", "preserve", "save"]
-    }
-    
-    # Expand query with semantic terms
-    query_terms = query.lower().split()
-    expanded_terms = set(query_terms)
-    semantic_matches = {}
-    
-    # Add semantically related terms
-    for term in query_terms:
-        if term in semantic_map:
-            for related in semantic_map[term]:
-                expanded_terms.add(related)
-                semantic_matches[related] = term
-    
-    results = []
-    
-    for item in data:
-        # Extract text for matching
-        all_text = " ".join([str(v).lower() for k, v in item.items() if v and isinstance(v, str)])
-        
-        # Count semantic matches
-        direct_matches = set()
-        semantic_hits = set()
-        
-        for term in expanded_terms:
-            if term in all_text:
-                if term in query_terms:
-                    direct_matches.add(term)
-                else:
-                    semantic_hits.add((term, semantic_matches.get(term, "related")))
-        
-        # Calculate score based on matches
-        score = 0
-        
-        # Direct matches are worth more
-        score += len(direct_matches) * 20
-        
-        # Semantic matches are worth less
-        score += len(semantic_hits) * 10
-        
-        # Bonus for having both direct and semantic matches
-        if direct_matches and semantic_hits:
-            score += 15
-        
-        if score > 0:
-            results.append({
-                'item': item,
-                'score': score,
-                'match_type': "VECTOR SIMILARITY",
-                'direct_matches': direct_matches,
-                'semantic_matches': semantic_hits
-            })
-    
-    # Sort by score (descending)
-    results.sort(key=lambda x: x['score'], reverse=True)
-    return results
-
-def combine_results(text_results, vector_results, id_field, vector_weight=0.7):
-    """
-    Combine text and vector results with proper weighting.
-    """
-    # Create a dictionary to hold combined results
-    combined = {}
-    text_weight = 1.0 - vector_weight
-    
-    # Add text results
-    for result in text_results:
-        item = result['item']
-        item_id = item[id_field]
-        
-        # Normalize score to 0-1 range (assuming max score is ~500)
-        normalized_score = min(result['score'] / 300.0, 1.0)
-        
-        combined[item_id] = {
-            'item': item,
-            'text_score': normalized_score,
-            'vector_score': 0,
-            'combined_score': normalized_score * text_weight,
-            'text_details': result,
-            'vector_details': None,
-            'match_types': [result['match_type']]
-        }
-    
-    # Add vector results
-    for result in vector_results:
-        item = result['item']
-        item_id = item[id_field]
-        
-        # Normalize score to 0-1 range (assuming max score is ~200)
-        normalized_score = min(result['score'] / 100.0, 1.0)
-        
-        if item_id in combined:
-            # Update existing entry
-            entry = combined[item_id]
-            entry['vector_score'] = normalized_score
-            entry['combined_score'] += normalized_score * vector_weight
-            entry['vector_details'] = result
-            if result['match_type'] not in entry['match_types']:
-                entry['match_types'].append(result['match_type'])
-        else:
-            # Create new entry
-            combined[item_id] = {
-                'item': item,
-                'text_score': 0,
-                'vector_score': normalized_score,
-                'combined_score': normalized_score * vector_weight,
-                'text_details': None,
-                'vector_details': result,
-                'match_types': [result['match_type']]
-            }
-    
-    # Convert to list and sort by combined score
-    results = list(combined.values())
-    results.sort(key=lambda x: x['combined_score'], reverse=True)
-    
-    return results[:10]  # Limit to top 10 results
 
 def main():
     """Main entry point for the CLI."""
     args = parse_args()
     
     try:
-        print(f"🔎 Hybrid Search: '{args.query}' in {args.data_source}")
+        print(f"Searching for '{args.query}' in {args.data_source}")
         print(f"Using {args.id_field} as ID field and {args.name_field} as name field")
+        print(f"Provider: {args.provider}")
         
-        # Load the CSV data
-        data = load_csv_data(args.data_source)
-        if not data:
-            print("No data found or error loading file.")
+        # Initialize the search engine
+        engine = SearchEngine()
+        
+        # Create field mapping
+        field_mapping = FieldMapping()
+        field_mapping.add_mapping('id', args.id_field)
+        field_mapping.add_mapping('name', args.name_field)
+        
+        # Set up the appropriate provider
+        if args.provider == 'csv':
+            provider = CSVProvider(args.data_source)
+        elif args.provider == 'sqlite':
+            provider = SQLiteProvider(args.data_source, args.table_name)
+        elif args.provider == 'json':
+            # Use local import without meta_search prefix
+            from providers.json_provider import JSONProvider
+            provider = JSONProvider(args.data_source)
+        elif args.provider == 'hybrid':
+            provider = HybridProvider(args.data_source, args.vector_index, args.table_name)
+            print(f"Using hybrid provider with vector weight: {args.vector_weight}")
+        else:
+            print(f"Unknown provider type: {args.provider}")
             sys.exit(1)
         
-        # Handle ID queries directly
+        # Set field mapping
+        provider.set_field_mapping(field_mapping)
+        
+        # For hybrid providers, rebuild index if requested
+        if args.provider == 'hybrid' and args.build_index:
+            print("Rebuilding vector index...")
+            provider.build_vector_index()
+        
+        # Register the provider with the engine
+        engine.register_provider(provider)
+        
+        # Check if this is an ID query
         id_value = extract_id_from_query(args.query)
         if id_value:
-            print(f"Detected ID search for: '{id_value}'")
-            print(f"Search method: DIRECT ID LOOKUP")
+            print(f"Detected ID search for: {id_value}")
+            # Try to get the item directly by ID
+            item = provider.get_by_id(id_value)
+            if item:
+                print(f"Found exact match for ID {id_value}")
+                # Format and display the result
+                print("\nDirect ID match:")
+                for key, value in item.items():
+                    if not key.startswith("_"):
+                        print(f"  {key}: {value}")
+                sys.exit(0)
+            else:
+                print(f"No exact match found for ID {id_value}, falling back to standard search")
+        
+        # Run the search with appropriate parameters
+        if args.provider == 'hybrid':
+            # We need to pass the hybrid_weight to the search method
+            # First get the search method's reference
+            original_search = provider.search
             
-            # Look for exact ID match
-            exact_match = find_exact_id_match(data, id_value, args.id_field)
+            # Override the search method to include the weight
+            def search_with_weight(query):
+                return original_search(query, args.vector_weight)
             
-            if exact_match:
-                print(f"\n=== DIRECT ID MATCH ===")
-                print(f"Found exact match for ID '{id_value}':")
-                for key, value in exact_match.items():
-                    print(f"  {key}: {value}")
-                
-                print("\nDo you want to continue with a hybrid search? (y/n)")
-                response = input().strip().lower()
-                if response != 'y':
-                    sys.exit(0)
+            # Replace the method
+            provider.search = search_with_weight
         
-        # Perform text search
-        text_results = text_search(data, args.query, args.id_field, args.name_field)
-        print(f"Text search found {len(text_results)} results")
-        
-        # Perform vector search
-        vector_results = vector_search(data, args.query, args.id_field, args.name_field)
-        print(f"Vector search found {len(vector_results)} results")
-        
-        # Combine results
-        combined_results = combine_results(text_results, vector_results, args.id_field, 0.7)
+        # Execute the search
+        results = engine.search(args.query)
         
         # Display results
-        if not combined_results:
+        if not results:
             print("No results found.")
         else:
-            print(f"\nFound {len(combined_results)} results:")
+            print(f"\nFound {len(results)} results:")
             
-            for idx, result in enumerate(combined_results, 1):
-                item = result['item']
+            result_index = 1
+            for result in results:
+                # Check if this is a separator item
+                if result.get("_separator", False):
+                    print(f"\n--- {result.get('_message', 'Vector search results below:')} ---\n")
+                    continue
                 
-                # Create appropriate icon based on match types
-                match_types = result['match_types']
+                print(f"\nResult {result_index}:")
+                result_index += 1
                 
-                if "EXACT PHRASE MATCH" in match_types:
-                    icon = "⭐⭐⭐"
-                elif "CONSECUTIVE WORDS MATCH" in match_types:
-                    icon = "⭐⭐"
-                elif "TEXT MATCH" in match_types and "VECTOR SIMILARITY" in match_types:
-                    icon = "⭐🔍"
-                elif "TEXT MATCH" in match_types:
-                    icon = "⭐"
-                else:
-                    icon = "🔍"
+                # Format scores for better readability if they exist
+                if "_score" in result:
+                    result["_score"] = f"{result['_score']:.4f}"
+                if "_structured_score" in result:
+                    result["_structured_score"] = f"{result['_structured_score']:.4f}"
+                if "_vector_score" in result:
+                    result["_vector_score"] = f"{result['_vector_score']:.4f}"
+                if "_combined_score" in result:
+                    result["_combined_score"] = f"{result['_combined_score']:.4f}"
                 
-                print(f"\n{icon} Result {idx}: {item.get(args.name_field, '')}")
-                
-                # Show scores
-                if result['text_score'] > 0 and result['vector_score'] > 0:
-                    print(f"  Combined score: {result['combined_score']:.2f}")
-                    print(f"  Text score: {result['text_score']:.2f}")
-                    print(f"  Vector score: {result['vector_score']:.2f}")
-                elif result['text_score'] > 0:
-                    print(f"  Text score: {result['text_score']:.2f}")
-                else:
-                    print(f"  Vector score: {result['vector_score']:.2f}")
-                
-                # Show match details
-                text_details = result.get('text_details')
-                if text_details:
-                    print(f"  Match type: {text_details['match_type']}")
-                    
-                    # Show fields where matches occurred
-                    matched_fields = text_details.get('matched_fields', {})
-                    if matched_fields:
-                        for field, matches in matched_fields.items():
-                            matches_str = ", ".join(matches)
-                            print(f"  - Matched in {field}: {matches_str}")
-                
-                # Show vector match details
-                vector_details = result.get('vector_details')
-                if vector_details:
-                    if "VECTOR SIMILARITY" not in match_types:
-                        print(f"  Match type: VECTOR SIMILARITY")
-                    
-                    # Show direct and semantic matches
-                    direct_matches = vector_details.get('direct_matches', set())
-                    if direct_matches:
-                        print(f"  Direct matches: {', '.join(direct_matches)}")
-                    
-                    semantic_matches = vector_details.get('semantic_matches', set())
-                    if semantic_matches:
-                        semantic_str = ", ".join([f"{term} → {orig}" for term, orig in semantic_matches])
-                        print(f"  Semantic expansions: {semantic_str}")
-                
-                # Print important details
-                important_fields = [args.id_field, args.name_field, 'description', 'status', 'environment', 'category']
-                print("  Record details:")
-                for key, value in item.items():
-                    if key in important_fields:
-                        print(f"    {key}: {value}")
-                
-                # For first result, ask if they want to see all fields
-                if idx == 1:
-                    print("\n  See all fields? (y/n)")
-                    show_all = input().strip().lower() == 'y'
-                    if show_all:
-                        for key, value in item.items():
-                            if key not in important_fields:
-                                print(f"    {key}: {value}")
+                # Print all fields
+                for key, value in result.items():
+                    # Skip internal fields starting with underscore
+                    if not key.startswith("_"):
+                        print(f"  {key}: {value}")
         
+    except ImportError as e:
+        print(f"Import error: {e}")
+        print("This could be due to missing module files. Make sure all required files exist.")
+        sys.exit(1)
     except Exception as e:
         print(f"Error: {e}")
         import traceback

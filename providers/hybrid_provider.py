@@ -305,3 +305,143 @@ class HybridProvider(DataProvider):
             The item if found, None otherwise
         """
         return self.data_provider.get_by_id(item_id)
+    
+    def _sequential_combine(
+        self, 
+        structured_results: List[Dict[str, Any]], 
+        vector_results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Combine results by placing structured results first, followed by vector results,
+        removing duplicates from vector results.
+        
+        Args:
+            structured_results: Results from structured data search
+            vector_results: Results from vector search
+            
+        Returns:
+            Combined results with structured results first
+        """
+        # Determine the ID field
+        id_field = 'id'
+        if self.field_mapping is not None:
+            for standard_name in self.field_mapping.get_mappings().keys():
+                if standard_name == 'id':
+                    id_field = standard_name
+                    break
+        
+        # Get IDs from structured results to avoid duplicates
+        structured_ids = set()
+        for item in structured_results:
+            if id_field in item:
+                structured_ids.add(str(item[id_field]))
+        
+        # Filter out duplicates from vector results
+        filtered_vector_results = [
+            item for item in vector_results 
+            if id_field in item and str(item[id_field]) not in structured_ids
+        ]
+        
+        # Combine the results (structured first, then vector)
+        combined_results = structured_results + filtered_vector_results
+        
+        # Add a "separator" item between structured and vector results if both exist
+        if structured_results and filtered_vector_results:
+            separator_index = len(structured_results)
+            combined_results.insert(separator_index, {
+                "_separator": True,
+                "_message": "Vector search results (semantic matches) below:",
+                "_result_type": "separator"
+            })
+        
+        return combined_results
+    
+def search(self, query: str, hybrid_weight: float = 0.5, sequential: bool = False) -> List[Dict[str, Any]]:
+    """
+    Search using both structured data and vector search.
+    
+    Args:
+        query: The search query
+        hybrid_weight: Weight for combining results (0 = structured only, 1 = vector only)
+        sequential: If True, use sequential combination instead of weighted
+        
+    Returns:
+        List of search results
+    """
+    # Check for ID search first
+    id_value = self._extract_id_from_query(query)
+    if id_value:
+        print(f"Detected ID search for: {id_value}")
+        item = self.data_provider.get_by_id(id_value)
+        if item:
+            print(f"Found exact match for ID {id_value}")
+            # Return as a list with a high score
+            result = item.copy()
+            result['_score'] = 100
+            result['_result_type'] = "exact_id_match"
+            return [result]
+        else:
+            print(f"No exact match found for ID {id_value}, falling back to standard search")
+    
+    # Build vector index if not already built
+    if not self.vector_index_built:
+        if not self.build_vector_index():
+            # If we couldn't build the vector index, just use the data provider
+            return self.data_provider.search(query)
+    
+    # Get data provider results
+    structured_results = self.data_provider.search(query)
+    
+    # Get vector search results
+    query_embedding = self.vector_search.get_mock_embedding(query)
+    vector_results = self.vector_search.search(query_embedding)
+    
+    # Convert vector results to same format as structured results
+    vector_results_dict = [
+        {**item_data, "_score": similarity, "_result_type": "vector"} 
+        for item_id, similarity, item_data in vector_results
+    ]
+    
+    # Mark structured results
+    for item in structured_results:
+        item["_result_type"] = "structured"
+    
+    # If one of the methods returns no results, just use the other
+    if not structured_results:
+        return vector_results_dict
+    if not vector_results_dict:
+        return structured_results
+    
+    # Combine results - either sequentially or with weighting
+    if sequential:
+        return self._sequential_combine(structured_results, vector_results_dict)
+    else:
+        return self._combine_results(structured_results, vector_results_dict, hybrid_weight)
+        
+def _extract_id_from_query(self, query: str) -> Optional[str]:
+        """
+        Extracts an ID from a query string if it appears to be an ID search.
+        
+        Args:
+            query: The search query
+            
+        Returns:
+            The ID string if found, None otherwise
+        """
+        # Pattern for "id X", "ID: X", "job id X", etc.
+        id_patterns = [
+            r'(?:^|\s)id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)job\s+id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)job[-_]id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)#(\d+)',
+            r'(?:^|\s)number\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)(\d{4,})\s*$'  # Standalone number (at least 4 digits)
+        ]
+        
+        import re
+        for pattern in id_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None

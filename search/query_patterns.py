@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from search.engine import SearchEngine
 from utils.field_mapping import FieldMapping
 
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Meta Search CLI')
@@ -69,12 +70,12 @@ def main():
             from providers.json_provider import JSONProvider
             provider = JSONProvider(args.data_source)
         elif args.provider == 'sequential':
-            from providers.sequential_hybrid_provider import SequentialHybridProvider
-            provider = SequentialHybridProvider(args.data_source, args.vector_index, args.table_name)
+            from providers.hybrid_provider import HybridProvider
+            provider = HybridProvider(args.data_source, args.vector_index, args.table_name)
             print(f"Using sequential hybrid provider (structured results first, then vector results)")
         elif args.provider == 'enhanced':
-            from providers.enhanced_sequential_provider import EnhancedSequentialHybridProvider
-            provider = EnhancedSequentialHybridProvider(args.data_source, args.vector_index, args.table_name)
+            from providers.hybrid_provider import HybridProvider
+            provider = HybridProvider(args.data_source, args.vector_index, args.table_name)
             print(f"Using enhanced sequential provider with smart query parsing")
         elif args.provider == 'hybrid':
             from providers.hybrid_provider import HybridProvider

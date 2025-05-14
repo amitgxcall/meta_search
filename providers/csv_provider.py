@@ -113,3 +113,12 @@ class CSVProvider(DataProvider):
                 return self.map_fields(item.copy())
         
         return None
+    
+    def get_all_items(self) -> List[Dict[str, Any]]:
+        """
+        Get all items from the CSV.
+        
+        Returns:
+            List of all items with fields mapped
+        """
+        return [self.map_fields(item.copy()) for item in self.data]
