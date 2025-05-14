@@ -5,18 +5,11 @@ Command-line interface for the job search system.
 import argparse
 import json
 import sys
+import os
 from typing import Dict, List, Any, Optional
 
-import sys
-import os
-# Add the parent directory to system path
-sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
-
-# Then change relative imports to package imports
-from meta_search.utils.field_mapping import FieldMapping
-
-
-from meta_search.unified_search import UnifiedJobSearch
+from .utils.field_mapping import FieldMapping
+from .unified_search import UnifiedJobSearch
 
 def parse_args():
     """Parse command line arguments."""
@@ -26,13 +19,17 @@ def parse_args():
     parser.add_argument('--data-source', required=True, help='Path to the data source file')
     
     # Optional arguments
-    parser.add_argument('--source-type', help='Data source type (auto-detected if not specified)')
+    parser.add_argument('--source-type', choices=['csv', 'sqlite', 'hybrid'], 
+                      help='Data source type (auto-detected if not specified)')
     parser.add_argument('--query', help='Search query (enter interactive mode if not provided)')
     parser.add_argument('--limit', type=int, default=10, help='Maximum number of results to return')
     parser.add_argument('--llm', action='store_true', help='Format output for LLM consumption')
     parser.add_argument('--explain', action='store_true', help='Explain how the query would be processed')
     parser.add_argument('--stats', action='store_true', help='Show statistics about the data source')
     parser.add_argument('--cache-dir', default='.cache', help='Directory for caching search data')
+    parser.add_argument('--use-hybrid', action='store_true', help='Use hybrid search with SQLite + vector search')
+    parser.add_argument('--no-hybrid', action='store_false', dest='use_hybrid', help='Disable hybrid search')
+    parser.add_argument('--convert-csv-to-sqlite', action='store_true', help='Convert CSV to SQLite (one-time operation)')
     
     # Field mapping options
     parser.add_argument('--id-field', help='Field name for the primary identifier')
@@ -41,6 +38,9 @@ def parse_args():
     parser.add_argument('--timestamp-fields', help='Comma-separated list of fields containing timestamps')
     parser.add_argument('--numeric-fields', help='Comma-separated list of fields containing numeric values')
     parser.add_argument('--text-fields', help='Comma-separated list of fields containing searchable text')
+    
+    # Set default for hybrid search
+    parser.set_defaults(use_hybrid=True)
     
     return parser.parse_args()
 
@@ -60,13 +60,64 @@ def create_field_mapping(args) -> Optional[FieldMapping]:
     
     # Create field mapping
     return FieldMapping(
-        id_field=args.id_field or 'id',
-        name_field=args.name_field or 'name',
+        id_field=args.id_field or 'job_id',
+        name_field=args.name_field or 'job_name',
         status_field=args.status_field or 'status',
         timestamp_fields=timestamp_fields,
         numeric_fields=numeric_fields,
         text_fields=text_fields
     )
+
+def convert_csv_to_sqlite(csv_path: str, sqlite_path: Optional[str] = None):
+    """Convert CSV file to SQLite database."""
+    import pandas as pd
+    import sqlite3
+    
+    # Default SQLite path if not provided
+    if sqlite_path is None:
+        sqlite_path = os.path.splitext(csv_path)[0] + '.db'
+    
+    print(f"Converting {csv_path} to SQLite database at {sqlite_path}")
+    
+    # Read CSV
+    df = pd.read_csv(csv_path)
+    
+    # Create parent directory if needed
+    os.makedirs(os.path.dirname(os.path.abspath(sqlite_path)), exist_ok=True)
+    
+    # Write to SQLite
+    conn = sqlite3.connect(sqlite_path)
+    df.to_sql('jobs', conn, if_exists='replace', index=False)
+    
+    # Create basic indexes
+    cursor = conn.cursor()
+    
+    # Try to identify and index key fields
+    for potential_id in ['job_id', 'id', 'task_id']:
+        if potential_id in df.columns:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{potential_id} ON jobs ({potential_id})")
+            break
+    
+    for potential_name in ['job_name', 'name', 'title']:
+        if potential_name in df.columns:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{potential_name} ON jobs ({potential_name})")
+            break
+    
+    for potential_status in ['status', 'state']:
+        if potential_status in df.columns:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{potential_status} ON jobs ({potential_status})")
+            break
+    
+    # Index timestamp fields
+    for ts_field in ['created_at', 'updated_at', 'execution_time', 'start_time', 'end_time']:
+        if ts_field in df.columns:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{ts_field} ON jobs ({ts_field})")
+    
+    conn.commit()
+    conn.close()
+    
+    print(f"Conversion complete. Created database with {len(df)} records.")
+    return sqlite_path
 
 def interactive_mode(search: UnifiedJobSearch):
     """Enter interactive search mode."""
@@ -143,6 +194,16 @@ def main():
     args = parse_args()
     
     try:
+        # Handle CSV to SQLite conversion if requested
+        if args.convert_csv_to_sqlite:
+            if not args.data_source.lower().endswith('.csv'):
+                print("Error: --convert-csv-to-sqlite requires a CSV file as data source")
+                sys.exit(1)
+                
+            sqlite_path = convert_csv_to_sqlite(args.data_source)
+            print(f"CSV converted to SQLite. You can now use: --data-source {sqlite_path}")
+            return
+        
         # Create field mapping
         field_mapping = create_field_mapping(args)
         
@@ -151,7 +212,8 @@ def main():
             data_source=args.data_source,
             source_type=args.source_type,
             field_mapping=field_mapping,
-            cache_dir=args.cache_dir
+            cache_dir=args.cache_dir,
+            use_hybrid=args.use_hybrid
         )
         
         # Show statistics if requested
@@ -184,6 +246,8 @@ def main():
     
     except Exception as e:
         print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

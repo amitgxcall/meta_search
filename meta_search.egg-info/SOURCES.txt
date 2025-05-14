@@ -7,6 +7,7 @@ meta_search.egg-info/top_level.txt
 providers/__init__.py
 providers/base.py
 providers/csv_provider.py
+providers/hybrid_provider.py
 providers/json_provider.py
 providers/sqlite_provider.py
 search/__init__.py

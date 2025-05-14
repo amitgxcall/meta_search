@@ -233,27 +233,35 @@ class CSVProvider(DataProvider):
         """Convert a record to text for vector search."""
         text_parts = []
         
-        # Add weighted fields
-        for field, value in record.items():
-            if value is None:
-                continue
-                
-            # Get weight for this field
-            weight = field_weights.get(field, field_weights.get('default', 1.0))
-            
-            # Skip fields with zero weight
-            if weight <= 0:
-                continue
-                
-            # Format and add field value
-            formatted_value = self._format_field_for_vector(field, value)
-            
-            # Add multiple times based on weight
-            weight_int = int(weight)
-            for _ in range(max(1, weight_int)):
-                text_parts.append(formatted_value)
+        # Prioritize the job name field
+        job_name_field = self.field_mapping.name_field
         
-        return " ".join(text_parts)
+        if job_name_field in record and record[job_name_field] is not None:
+            job_name = str(record[job_name_field])
+            
+            # Add with special prefix for exact matching
+            text_parts.append(f"job_name:{job_name}")
+            
+            # Add multiple repetitions for higher weight
+            weight = field_weights.get(job_name_field, 5.0)
+            for _ in range(int(weight)):
+                text_parts.append(job_name)
+            
+            # Add individual words from the job name
+            for word in job_name.split('_'):
+                if word:
+                    text_parts.extend([word] * 3)
+        
+        # Add other fields with lower weights
+        for field, value in record.items():
+            if field != job_name_field and value is not None:
+                weight = field_weights.get(field, field_weights.get('default', 1.0))
+                if weight > 0:
+                    text_parts.append(f"{field}:{value}")
+        
+        # Final text for vector search
+        result = " ".join(text_parts)
+        return result
     
     def _format_field_for_vector(self, field: str, value: Any) -> str:
         """

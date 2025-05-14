@@ -5,6 +5,7 @@ Utilities for formatting search results.
 import json
 from typing import Dict, List, Any, Optional, Union
 import numpy as np
+import shutil
 
 def format_for_llm(results: List[Dict[str, Any]], 
                   user_query: str,
@@ -50,8 +51,32 @@ def format_for_llm(results: List[Dict[str, Any]],
     # Create a summary of results
     result_types = {}
     for r in results:
-        job = r.get('job_details', r)
-        status = str(job.get(status_field, 'unknown'))
+        # Get job details from result
+        if 'job_details' in r:
+            job = r['job_details']
+        else:
+            job = r
+            
+        # Look for status in job details
+        status = None
+        # Try status_field first
+        if status_field in job:
+            status = str(job.get(status_field, 'unknown'))
+        # Then try 'status'
+        elif 'status' in job:
+            status = str(job.get('status', 'unknown'))
+        # Then try other common status fields
+        else:
+            for field_name in ['state', 'condition', 'job_status']:
+                if field_name in job:
+                    status = str(job.get(field_name, 'unknown'))
+                    break
+        
+        # Fallback if no status found
+        if not status:
+            status = 'unknown'
+            
+        # Track count by status
         if status not in result_types:
             result_types[status] = 0
         result_types[status] += 1
@@ -59,19 +84,41 @@ def format_for_llm(results: List[Dict[str, Any]],
     # Format jobs in a clean way
     formatted_jobs = []
     for r in results:
-        job = r.get('job_details', r)
+        # Extract job details
+        if 'job_details' in r:
+            job = r['job_details']
+            match_type = r.get('match_type', 'unknown')
+            score = r.get('score', 0)
+        else:
+            job = r
+            match_type = 'unknown'
+            score = 0
+        
+        # Try various ID fields
+        job_id = None
+        for field in [id_field, 'id', 'job_id', '_id', 'uuid']:
+            if field in job:
+                job_id = job.get(field)
+                break
+                
+        # Try various name fields
+        job_name = None
+        for field in [name_field, 'name', 'job_name', 'title', 'description']:
+            if field in job:
+                job_name = job.get(field)
+                break
         
         # Create a generic representation
         formatted_job = {
-            "id": json_serializable(job.get(id_field, '')),
-            "name": str(job.get(name_field, '')),
-            "match_type": r.get('match_type', 'unknown'),
-            "match_score": round(float(r.get('score', 0)), 4)
+            "id": json_serializable(job_id or ''),
+            "name": str(job_name or ''),
+            "match_type": match_type,
+            "match_score": round(float(score), 4)
         }
         
-        # Add all other fields
+        # Add all other fields from job details
         for k, v in job.items():
-            if k not in [id_field, name_field]:
+            if k not in [id_field, name_field, 'id', 'name']:
                 formatted_job[k] = json_serializable(v)
         
         formatted_jobs.append(formatted_job)
@@ -79,13 +126,22 @@ def format_for_llm(results: List[Dict[str, Any]],
     # Create a suggested response
     if len(results) == 1:
         job = results[0].get('job_details', results[0])
-        job_id = job.get(id_field, 'unknown')
-        job_name = job.get(name_field, 'unknown')
-        status = job.get(status_field, 'unknown')
-        suggested_response = f"I found one job matching '{user_query}': {job_name} (ID: {job_id}), which is currently {status}."
+        
+        # Get ID and name, preferring mapped fields but falling back
+        job_id = job.get('id', job.get(id_field, 'unknown'))
+        job_name = job.get('name', job.get(name_field, 'unknown'))
+        
+        # Get status with fallbacks
+        job_status = job.get('status', job.get(status_field, 'unknown'))
+        
+        suggested_response = f"I found one job matching '{user_query}': {job_name} (ID: {job_id}), which is currently {job_status}."
     else:
         status_summary = ", ".join([f"{count} {status}" for status, count in result_types.items()])
-        first_job_name = results[0].get('job_details', results[0]).get(name_field, 'unknown')
+        
+        # Get name of first result with fallbacks
+        first_job = results[0].get('job_details', results[0])
+        first_job_name = first_job.get('name', first_job.get(name_field, 'unknown'))
+        
         suggested_response = f"I found {len(results)} jobs matching '{user_query}': {status_summary}. The top result is {first_job_name}."
     
     # Make sure the entire result is JSON serializable
@@ -98,7 +154,7 @@ def format_for_llm(results: List[Dict[str, Any]],
     })
 
 def display_results(results: List[Dict[str, Any]], 
-                   max_width: int = 100,
+                   max_width: Optional[int] = None,
                    id_field: str = 'id',
                    name_field: str = 'name',
                    status_field: Optional[str] = 'status') -> None:
@@ -107,7 +163,7 @@ def display_results(results: List[Dict[str, Any]],
     
     Args:
         results: List of search result dictionaries
-        max_width: Maximum width for display
+        max_width: Maximum width for display (auto-detect if None)
         id_field: Field name for ID
         name_field: Field name for name
         status_field: Field name for status
@@ -116,29 +172,31 @@ def display_results(results: List[Dict[str, Any]],
         print("No results found.")
         return
     
+    # Auto-detect terminal width if not specified
+    if max_width is None:
+        try:
+            terminal_width, _ = shutil.get_terminal_size()
+            max_width = max(80, min(terminal_width, 160))  # Reasonable bounds
+        except Exception:
+            max_width = 120  # Default if detection fails
+    
     # Calculate column widths
     id_width = 10
     name_width = 30
     status_width = 15
     score_width = 10
     
-    if status_field:
-        details_width = max_width - id_width - name_width - status_width - score_width - 8  # 8 for separators
-    else:
-        details_width = max_width - id_width - name_width - score_width - 6  # 6 for separators
+    # Calculate details width
+    details_width = max_width - id_width - name_width - status_width - score_width - 8
     
     # Print header
-    if status_field:
-        header = f"{'ID':<{id_width}} | {'Name':<{name_width}} | {'Status':<{status_width}} | {'Score':<{score_width}} | Details"
-    else:
-        header = f"{'ID':<{id_width}} | {'Name':<{name_width}} | {'Score':<{score_width}} | Details"
-    
+    header = f"{'ID':<{id_width}} | {'Name':<{name_width}} | {'Status':<{status_width}} | {'Score':<{score_width}} | Details"
     print("\n" + header)
     print("-" * max_width)
     
     # Print each result
     for result in results:
-        # Get job details
+        # Extract job details
         if 'job_details' in result:
             job = result['job_details']
             score = result.get('score', 0)
@@ -146,27 +204,63 @@ def display_results(results: List[Dict[str, Any]],
             job = result
             score = 0
         
-        # Format fields
-        job_id = str(job.get(id_field, ''))[:id_width]
-        job_name = str(job.get(name_field, ''))[:name_width]
+        # Extract ID - first try the generic 'id' field, then try original field
+        job_id = ''
+        for field in ['id', id_field, 'job_id', '_id', 'uuid']:
+            if field in job:
+                job_id = str(job.get(field, ''))
+                break
+                
+        # Truncate if needed
+        job_id = job_id[:id_width]
         
-        # Format score
+        # Extract Name - first try the generic 'name' field, then try original field
+        job_name = ''
+        for field in ['name', name_field, 'job_name', 'title']:
+            if field in job:
+                job_name = str(job.get(field, ''))
+                break
+                
+        # Truncate if needed
+        job_name = job_name[:name_width]
+        
+        # Extract Status with multiple fallbacks
+        job_status = ''
+        for field in ['status', status_field, 'state', 'condition']:
+            if field in job and field in job:
+                job_status = str(job.get(field, ''))
+                break
+                
+        # Truncate if needed
+        job_status = job_status[:status_width]
+        
+        # Format score with proper precision
         score_str = f"{score:.4f}" if isinstance(score, (int, float)) else str(score)
         score_str = score_str[:score_width]
         
         # Get other fields for details
         details = []
-        for field, value in job.items():
-            if field not in [id_field, name_field, status_field]:
-                details.append(f"{field}: {value}")
+        blacklist_fields = ['id', 'name', 'status', 'state', 'condition', 'job_id', 'job_name']
         
+        for field, value in job.items():
+            if field not in blacklist_fields:
+                # Format value based on type
+                if isinstance(value, (int, float)):
+                    value_str = f"{value}"
+                elif value is None:
+                    value_str = "null"
+                else:
+                    value_str = str(value)
+                    # Truncate long values
+                    if len(value_str) > 50:
+                        value_str = value_str[:47] + "..."
+                        
+                details.append(f"{field}: {value_str}")
+        
+        # Format details with better spacing and truncation
         details_text = ", ".join(details)
         if len(details_text) > details_width:
             details_text = details_text[:details_width-3] + "..."
         
         # Print row
-        if status_field:
-            job_status = str(job.get(status_field, ''))[:status_width]
-            print(f"{job_id:<{id_width}} | {job_name:<{name_width}} | {job_status:<{status_width}} | {score_str:<{score_width}} | {details_text}")
-        else:
-            print(f"{job_id:<{id_width}} | {job_name:<{name_width}} | {score_str:<{score_width}} | {details_text}")
+        print(f"{job_id:<{id_width}} | {job_name:<{name_width}} | {job_status:<{status_width}} | {score_str:<{score_width}} | {details_text}")
