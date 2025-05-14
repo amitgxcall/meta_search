@@ -1,9 +1,33 @@
 """
-Search functionality for the job search system.
+Search package for meta_search.
+Contains the search engine and related functionality.
 """
 
 from .engine import SearchEngine
-from .query_classifier import QueryClassifier
-from .query_patterns import create_query_patterns
-from .vector_search import VectorSearchEngine
-from .result_formatter import format_for_llm, display_results
+
+__all__ = ['SearchEngine']
+
+# Import and expose other search module components
+try:
+    from .query_classifier import QueryClassifier
+    __all__.append('QueryClassifier')
+except ImportError:
+    pass
+
+try:
+    from .query_patterns import QueryPattern
+    __all__.append('QueryPattern')
+except ImportError:
+    pass
+
+try:
+    from .vector_search import VectorSearchEngine
+    __all__.append('VectorSearchEngine')
+except ImportError:
+    pass
+
+try:
+    from .result_formatter import format_results
+    __all__.append('format_results')
+except ImportError:
+    pass

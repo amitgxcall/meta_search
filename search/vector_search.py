@@ -1,245 +1,165 @@
 """
-Vector search functionality for the search engine.
+Vector search implementation for meta_search.
 """
 
 import os
-import pickle
 import numpy as np
-from typing import Dict, List, Any, Optional, Tuple
-import re
-
-# Import dependencies with fallbacks
-try:
-    import faiss
-    FAISS_AVAILABLE = True
-except ImportError:
-    FAISS_AVAILABLE = False
-    print("Warning: FAISS is not available. Vector search will be limited.")
-
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    TFIDF_AVAILABLE = True
-except ImportError:
-    TFIDF_AVAILABLE = False
-    print("Warning: scikit-learn is not available. Vector search will be limited.")
+from typing import List, Dict, Any, Optional, Tuple
+import json
+import pickle
 
 class VectorSearchEngine:
     """
-    Vector search engine using TF-IDF and FAISS.
+    Vector-based search implementation using simple cosine similarity.
+    In a production environment, you might use specialized libraries 
+    like FAISS, Annoy, or ScaNN for more efficient similarity search.
     """
     
-    def __init__(self, cache_dir: str):
+    def __init__(self, embedding_dim: int = 768):
         """
-        Initialize vector search engine.
+        Initialize the vector search engine.
         
         Args:
-            cache_dir: Directory for caching vectors
+            embedding_dim: Dimension of the embedding vectors
         """
-        self.cache_dir = cache_dir
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        self.vectorizer = None
-        self.vectors = None
-        self.index = None
-        self.raw_texts = None  # Store original texts for exact matching
-        self.record_indices = None  # Store mapping of vector index to record index
-        self.enabled = FAISS_AVAILABLE and TFIDF_AVAILABLE
+        self.embedding_dim = embedding_dim
+        self.index = {}  # id -> embedding
+        self.id_to_data = {}  # id -> original data
     
-    def initialize(self, data_hash: str, texts: List[str]) -> bool:
+    def add_item(self, item_id: str, item_data: Dict[str, Any], embedding: List[float]) -> None:
         """
-        Initialize vector search with text data.
+        Add an item to the vector index.
         
         Args:
-            data_hash: Hash of the data source (for caching)
-            texts: List of text representations of records
+            item_id: Unique identifier for the item
+            item_data: Original item data
+            embedding: Vector embedding for the item
+        """
+        # Convert to numpy array for efficient operations
+        embedding_array = np.array(embedding, dtype=np.float32)
+        
+        # Normalize the vector for cosine similarity
+        norm = np.linalg.norm(embedding_array)
+        if norm > 0:
+            embedding_array = embedding_array / norm
+        
+        self.index[item_id] = embedding_array
+        self.id_to_data[item_id] = item_data
+    
+    def search(self, query_embedding: List[float], limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """
+        Search for similar items.
+        
+        Args:
+            query_embedding: Vector embedding for the query
+            limit: Maximum number of results to return
             
         Returns:
-            True if initialization succeeded, False otherwise
+            List of tuples (item_id, similarity_score, item_data)
         """
-        if not self.enabled:
-            return False
+        if not self.index:
+            return []
         
-        # Define cache paths
-        vectors_path = os.path.join(self.cache_dir, f"vectors_{data_hash}.pkl")
-        vectorizer_path = os.path.join(self.cache_dir, f"vectorizer_{data_hash}.pkl")
-        texts_path = os.path.join(self.cache_dir, f"texts_{data_hash}.pkl")
+        # Convert to numpy array and normalize
+        query_array = np.array(query_embedding, dtype=np.float32)
+        norm = np.linalg.norm(query_array)
+        if norm > 0:
+            query_array = query_array / norm
         
-        # Force cache rebuild (during development - remove this in production)
-        force_rebuild = True
+        # Calculate similarities
+        results = []
+        for item_id, item_embedding in self.index.items():
+            # Cosine similarity is just the dot product of normalized vectors
+            similarity = float(np.dot(query_array, item_embedding))
+            results.append((item_id, similarity, self.id_to_data[item_id]))
         
-        # Try to load from cache if not forcing rebuild
-        if not force_rebuild and os.path.exists(vectors_path) and os.path.exists(vectorizer_path) and os.path.exists(texts_path):
-            try:
-                with open(vectorizer_path, 'rb') as f:
-                    self.vectorizer = pickle.load(f)
-                with open(vectors_path, 'rb') as f:
-                    self.vectors = pickle.load(f)
-                with open(texts_path, 'rb') as f:
-                    cached_data = pickle.load(f)
-                    self.raw_texts = cached_data.get('texts', [])
-                    self.record_indices = cached_data.get('indices', list(range(len(texts))))
-                
-                # Create FAISS index
-                self.index = faiss.IndexFlatL2(self.vectors.shape[1])
-                self.index.add(self.vectors)
-                
-                print("Vector search components loaded from cache")
-                return True
-            except Exception as e:
-                print(f"Error loading vectors from cache: {str(e)}")
-                print("Rebuilding vector search components...")
+        # Sort by similarity (descending)
+        results.sort(key=lambda x: x[1], reverse=True)
         
-        # Create new vectors
+        return results[:limit]
+    
+    def save_index(self, file_path: str) -> bool:
+        """
+        Save the vector index to disk.
+        
+        Args:
+            file_path: Path to save the index
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
-            print("Building new vector search index...")
+            data = {
+                "embedding_dim": self.embedding_dim,
+                "index": {k: v.tolist() for k, v in self.index.items()},
+                "id_to_data": self.id_to_data
+            }
             
-            # Store original texts for exact matching
-            self.raw_texts = texts
-            self.record_indices = list(range(len(texts)))
+            with open(file_path, 'wb') as f:
+                pickle.dump(data, f)
             
-            # Create a better vectorizer with custom analyzer
-            self.vectorizer = TfidfVectorizer(
-                lowercase=True, 
-                stop_words='english',
-                ngram_range=(1, 2),  # Include both unigrams and bigrams
-                max_features=5000,
-                min_df=1,
-                norm='l2',
-                use_idf=True,
-                analyzer='word',
-                token_pattern=r'\b[a-zA-Z0-9_]+\b'  # Ensure underscores are treated as part of words
-            )
-            
-            # Fit transform the texts
-            self.vectors = self.vectorizer.fit_transform(texts).toarray().astype(np.float32)
-            
-            # Create FAISS index
-            self.index = faiss.IndexFlatL2(self.vectors.shape[1])
-            self.index.add(self.vectors)
-            
-            # Cache everything
-            with open(vectorizer_path, 'wb') as f:
-                pickle.dump(self.vectorizer, f)
-            with open(vectors_path, 'wb') as f:
-                pickle.dump(self.vectors, f)
-            with open(texts_path, 'wb') as f:
-                pickle.dump({'texts': self.raw_texts, 'indices': self.record_indices}, f)
-            
-            print(f"Built and cached vector search index with {len(texts)} documents")
             return True
         except Exception as e:
-            print(f"Error initializing vector search: {str(e)}")
+            print(f"Error saving index: {e}")
             return False
     
-    def search(self, query: str, top_k: int = 10) -> Tuple[List[int], List[float]]:
+    def load_index(self, file_path: str) -> bool:
         """
-        Search for similar records with improved relevance ranking.
+        Load the vector index from disk.
         
         Args:
-            query: Query string
-            top_k: Maximum number of results
+            file_path: Path to load the index from
             
         Returns:
-            Tuple of (indices, similarities)
+            True if successful, False otherwise
         """
-        if not self.enabled or not self.vectorizer or not self.index:
-            return [], []
+        if not os.path.exists(file_path):
+            return False
         
         try:
-            # First prioritize exact matches on job names
-            direct_matches = []
-            direct_match_scores = []
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
             
-            # Process query to extract key terms
-            query_lower = query.lower()
+            self.embedding_dim = data["embedding_dim"]
+            self.index = {k: np.array(v, dtype=np.float32) for k, v in data["index"].items()}
+            self.id_to_data = data["id_to_data"]
             
-            # Add jobs with exact term matches to the name at the top
-            # Use a high boost factor for these exact matches
-            boost_factor = 0.03  # Adjust this to control importance of direct term matches
-            
-            for i, text in enumerate(self.raw_texts):
-                text_lower = text.lower()
-                
-                # Calculate a score based on direct term presence in job name
-                match_score = 0
-                
-                # Check for exact job name match (higher boost)
-                if 'job_name:' in text_lower:
-                    job_name_parts = re.findall(r'job_name:([^\s,;]+)', text_lower)
-                    name_matches = 0
-                    if job_name_parts:
-                        job_name = job_name_parts[0].lower()
-                        # Extract individual terms from query
-                        query_terms = [term for term in query_lower.split() if len(term) > 2]
-                        for term in query_terms:
-                            if term in job_name:
-                                name_matches += 1
-                                # Boost even more if it's an exact word match
-                                if term in job_name.split('_'):
-                                    name_matches += 0.5
-                    
-                    # Calculate a significant boost for name matches
-                    if name_matches > 0:
-                        match_score = boost_factor * name_matches
-                
-                # If there's any match score, keep track of it
-                if match_score > 0:
-                    direct_matches.append(i)
-                    direct_match_scores.append(match_score)
-            
-            # Convert query to vector
-            query_vector = self.vectorizer.transform([query]).toarray().astype(np.float32)
-            
-            # Search with FAISS (returns L2 distances - smaller is better)
-            faiss_k = top_k * 3  # Get more results than needed for filtering
-            distances, indices = self.index.search(query_vector, faiss_k)
-            
-            # Convert distances to similarity scores (L2 distance to similarity)
-            similarities = []
-            indexed_similarities = []
-            
-            for i, dist in enumerate(distances[0]):
-                # Map L2 distance to a reasonable similarity score 
-                # Lower distance = higher similarity
-                base_similarity = max(0.0, 1.0 - (dist / 30.0))
-                similarity = min(0.99, base_similarity)  # Cap at 0.99
-                
-                # Get original record index
-                original_idx = self.record_indices[indices[0][i]] if i < len(indices[0]) else -1
-                
-                if original_idx >= 0:
-                    indexed_similarities.append((original_idx, similarity))
-            
-            # Combine direct matches with vector similarities
-            all_matches = {}
-            
-            # Add direct matches first with their boost
-            for i, (idx, score) in enumerate(zip(direct_matches, direct_match_scores)):
-                all_matches[idx] = score
-            
-            # Add vector similarities, potentially boosting existing matches
-            for idx, sim in indexed_similarities:
-                if idx in all_matches:
-                    # Boost existing match
-                    all_matches[idx] += sim
-                else:
-                    all_matches[idx] = sim
-            
-            # Sort by score (descending) and convert to lists
-            sorted_matches = sorted(all_matches.items(), key=lambda x: x[1], reverse=True)
-            
-            # Return the top_k results
-            final_indices = []
-            final_scores = []
-            
-            for idx, score in sorted_matches[:top_k]:
-                final_indices.append(idx)
-                final_scores.append(min(0.9999, score))  # Cap at 0.9999
-            
-            return final_indices, final_scores
-            
+            return True
         except Exception as e:
-            print(f"Error in vector search: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return [], []
+            print(f"Error loading index: {e}")
+            return False
+
+    @staticmethod
+    def get_mock_embedding(text: str, dim: int = 768) -> List[float]:
+        """
+        Generate a mock embedding for text.
+        In a real implementation, you would use a proper embedding model.
+        
+        Args:
+            text: Text to generate an embedding for
+            dim: Dimension of the embedding
+            
+        Returns:
+            Vector embedding
+        """
+        # This is just a simple deterministic mock implementation
+        # In a real system, you'd use a proper embedding model
+        import hashlib
+        
+        # Get a deterministic hash of the text
+        hash_obj = hashlib.md5(text.encode())
+        hash_bytes = hash_obj.digest()
+        
+        # Use the hash to seed a random number generator
+        rng = np.random.RandomState(int.from_bytes(hash_bytes[:4], byteorder='little'))
+        
+        # Generate a random vector
+        embedding = rng.randn(dim).astype(np.float32)
+        
+        # Normalize to unit length
+        embedding = embedding / np.linalg.norm(embedding)
+        
+        return embedding.tolist()
+
+# For backward compatibility
+VectorSearch = VectorSearchEngine

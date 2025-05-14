@@ -1,25 +1,31 @@
 """
-Providers package for meta_search.
-Contains implementations for different data sources.
+Update providers package to include the enhanced providers.
 """
 
 from .base import DataProvider
+from .csv_provider import CSVProvider
+from .enhanced_csv_provider import EnhancedCSVProvider
+from .sqlite_provider import SQLiteProvider
 
-__all__ = ['DataProvider']
+# Import extensions
+from . import csv_provider_extension
 
-# Import and expose specific provider implementations
-try:
-    from .csv_provider import CSVProvider
-    __all__.append('CSVProvider')
-except ImportError:
-    pass
+# Import hybrid providers
+from .hybrid_provider import HybridProvider
+from .sequential_hybrid_provider import SequentialHybridProvider
+from .enhanced_sequential_provider import EnhancedSequentialHybridProvider
 
-try:
-    from .sqlite_provider import SQLiteProvider
-    __all__.append('SQLiteProvider')
-except ImportError:
-    pass
+__all__ = [
+    'DataProvider',
+    'CSVProvider',
+    'EnhancedCSVProvider',
+    'SQLiteProvider',
+    'HybridProvider',
+    'SequentialHybridProvider',
+    'EnhancedSequentialHybridProvider'
+]
 
+# Import optional providers if available
 try:
     from .json_provider import JSONProvider
     __all__.append('JSONProvider')
