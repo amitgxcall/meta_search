@@ -31,19 +31,29 @@ class QueryClassifier:
             'like', 'similar', 'about', 'related to', 'concerning',
             'regarding', 'find', 'search for', 'show me'
         ]
+        
+        # NEW: Keywords that indicate counting queries
+        self.counting_keywords = [
+            'how many', 'count', 'total', 'number of', 'tally', 
+            'sum of', 'sum up', 'calculate', 'compute'
+        ]
     
     def classify(self, query: str) -> str:
         """
-        Classify a query as structured, semantic, or hybrid.
+        Classify a query as structured, semantic, hybrid, or counting.
         
         Args:
             query: Query string
             
         Returns:
-            Classification as 'structured', 'semantic', or 'hybrid'
+            Classification as 'structured', 'semantic', 'hybrid', or 'counting'
         """
         query_lower = query.lower()
         
+        # NEW: Check if this is a counting query first
+        if self.is_counting_query(query):
+            return 'counting'
+            
         # Check if any structured patterns match
         has_structured = False
         for pattern, _ in self.patterns:
@@ -66,3 +76,62 @@ class QueryClassifier:
             return 'structured'
         else:
             return 'semantic'  # Default to semantic search
+    
+    def is_counting_query(self, query: str) -> bool:
+        """
+        Determine if a query is asking for a count.
+        
+        Args:
+            query: Query string
+            
+        Returns:
+            True if the query is about counting, False otherwise
+        """
+        query_lower = query.lower()
+        
+        # Check for counting keywords
+        if any(keyword in query_lower for keyword in self.counting_keywords):
+            return True
+            
+        # Advanced pattern matching for counting queries
+        counting_patterns = [
+            r'\bhow\s+many\b',
+            r'\bcount(?:ing)?\b',
+            r'\btotal\s+(?:number|amount|count)?\b',
+            r'\bnumber\s+of\b',
+        ]
+        
+        return any(re.search(pattern, query_lower) for pattern in counting_patterns)
+        
+    def extract_count_target(self, query: str) -> str:
+        """
+        Extract what we're counting from the query.
+        
+        Args:
+            query: Query string
+            
+        Returns:
+            String describing what's being counted
+        """
+        query_lower = query.lower()
+        
+        # Try to extract the target object being counted
+        # Simple pattern: "how many X" or "count X" or "total X"
+        patterns = [
+            r'how\s+many\s+(.*?)(?:\s+are|\s+with|\s+in|\s+is|\s+do|\?|$)',
+            r'count\s+(?:of\s+)?(.*?)(?:\s+in|\s+with|\s+that|\?|$)',
+            r'total\s+(?:number\s+of\s+)?(.*?)(?:\s+in|\s+with|\s+that|\?|$)',
+            r'number\s+of\s+(.*?)(?:\s+in|\s+with|\s+that|\?|$)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return match.group(1).strip()
+                
+        # Fallback: remove counting keywords and return the rest
+        for keyword in self.counting_keywords:
+            if keyword in query_lower:
+                return query_lower.replace(keyword, '').strip()
+                
+        return "items"  # Default if we can't determine what to count
