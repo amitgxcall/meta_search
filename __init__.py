@@ -1,9 +1,33 @@
 """
-Job Search System - A flexible, extensible system for searching job data.
+Search package for meta_search.
+Contains the search engine and related functionality.
 """
 
-from .unified_search import UnifiedJobSearch
-from .utils.field_mapping import FieldMapping
-from .providers.base import DataProvider
+from .engine import SearchEngine
 
-__version__ = '0.1.0'
+__all__ = ['SearchEngine']
+
+# Import and expose other search module components
+try:
+    from .query_classifier import QueryClassifier
+    __all__.append('QueryClassifier')
+except ImportError:
+    pass
+
+try:
+    from .query_patterns import QueryPattern
+    __all__.append('QueryPattern')
+except ImportError:
+    pass
+
+try:
+    from .vector_search import VectorSearch
+    __all__.append('VectorSearch')
+except ImportError:
+    pass
+
+try:
+    from .result_formatter import format_results
+    __all__.append('format_results')
+except ImportError:
+    pass

@@ -1,14 +1,27 @@
-# providers/__init__.py should expose get_provider_class and PROVIDER_TYPES
+"""
+Providers package for meta_search.
+Contains implementations for different data sources.
+"""
+
 from .base import DataProvider
-from .csv_provider import CSVProvider
-from .json_provider import JSONProvider
 
-# Register all available providers
-PROVIDER_TYPES = {
-    'csv': CSVProvider,
-    'json': JSONProvider
-}
+__all__ = ['DataProvider']
 
-def get_provider_class(provider_type: str):
-    """Get provider class by type."""
-    return PROVIDER_TYPES.get(provider_type.lower())
+# Import and expose specific provider implementations
+try:
+    from .csv_provider import CSVProvider
+    __all__.append('CSVProvider')
+except ImportError:
+    pass
+
+try:
+    from .sqlite_provider import SQLiteProvider
+    __all__.append('SQLiteProvider')
+except ImportError:
+    pass
+
+try:
+    from .json_provider import JSONProvider
+    __all__.append('JSONProvider')
+except ImportError:
+    pass

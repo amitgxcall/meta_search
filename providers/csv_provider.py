@@ -1,303 +1,115 @@
 """
-CSV data provider for the search system.
+CSV data provider implementation.
 """
 
-import csv
 import os
-import datetime
-from typing import Dict, List, Any, Optional, Tuple
+import csv
+from typing import List, Dict, Any, Optional
 
-from ..utils.field_mapping import FieldMapping
-from .base import DataProvider
+# Direct import instead of relative import
+import sys
+from providers.base import DataProvider
 
 class CSVProvider(DataProvider):
     """
-    Data provider for CSV files.
+    Data provider that reads from CSV files.
     """
     
-    def __init__(self, 
-                 file_path: str, 
-                 field_mapping: Optional[FieldMapping] = None,
-                 date_format: str = "%Y-%m-%d %H:%M:%S"):
+    def __init__(self, source_path: str):
         """
-        Initialize CSV data provider.
+        Initialize the CSV provider.
         
         Args:
-            file_path: Path to the CSV file
-            field_mapping: Field mapping configuration
-            date_format: Format string for parsing dates
+            source_path: Path to the CSV file
         """
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"CSV file not found: {file_path}")
-            
-        self.file_path = file_path
-        self.field_mapping = field_mapping or FieldMapping()
-        self.date_format = date_format
+        super().__init__(source_path)
+        self.data = []
+        self.headers = []
+        self.connect()
         
-        # Load all records and determine field types
-        self._records, self._fields = self._load_data()
-    
-    def _load_data(self) -> Tuple[List[Dict[str, Any]], List[str]]:
+    def connect(self) -> bool:
         """
-        Load data from the CSV file.
+        Load the CSV file into memory.
         
         Returns:
-            Tuple of (records, field_names)
+            True if successful, False otherwise
         """
-        records = []
-        field_names = []
+        if not os.path.exists(self.source_path):
+            print(f"Error: CSV file not found at {self.source_path}")
+            return False
         
         try:
-            with open(self.file_path, 'r', newline='', encoding='utf-8') as csvfile:
+            with open(self.source_path, 'r', newline='', encoding='utf-8') as csvfile:
                 reader = csv.DictReader(csvfile)
-                field_names = reader.fieldnames or []
-                
-                for row in reader:
-                    processed_row = {}
-                    
-                    for field, value in row.items():
-                        # Process field value based on type
-                        processed_row[field] = self._process_field_value(field, value)
-                    
-                    records.append(processed_row)
-        
+                self.headers = reader.fieldnames or []
+                self.data = list(reader)
+            return True
         except Exception as e:
-            raise ValueError(f"Error loading CSV file: {str(e)}")
+            print(f"Error loading CSV file: {e}")
+            return False
         
-        return records, field_names
-    
-    def _process_field_value(self, field: str, value: str) -> Any:
+    def search(self, query: str) -> List[Dict[str, Any]]:
         """
-        Process a field value based on its type.
+        Search the CSV data.
         
         Args:
-            field: Field name
-            value: String value from CSV
+            query: The search query
             
         Returns:
-            Processed value with appropriate type
+            List of matching items
         """
-        # Skip empty fields
-        if value is None or value.strip() == '':
-            return None
-        
-        # Convert numeric fields
-        if field in self.field_mapping.numeric_fields:
-            try:
-                if '.' in value:
-                    return float(value)
-                else:
-                    return int(value)
-            except ValueError:
-                return value
-        
-        # Convert timestamp fields
-        elif field in self.field_mapping.timestamp_fields:
-            try:
-                return datetime.datetime.strptime(value, self.date_format)
-            except ValueError:
-                return value
-        
-        # Keep other fields as strings
-        else:
-            return value
-    
-    def get_all_fields(self) -> List[str]:
-        """Get a list of all available fields/columns in the data."""
-        return self._fields
-    
-    def get_record_count(self) -> int:
-        """Get the total number of records in the data."""
-        return len(self._records)
-    
-    def get_all_records(self) -> List[Dict[str, Any]]:
-        """Get all records from the data source."""
-        return self._records
-    
-    def get_record_by_id(self, id_value: Any) -> Optional[Dict[str, Any]]:
-        """Get a specific record by its ID."""
-        id_field = self.field_mapping.id_field
-        
-        for record in self._records:
-            if record.get(id_field) == id_value:
-                return record
-        
-        return None
-    
-    def query_records(self, filters: Dict[str, Any], limit: int = 100) -> List[Dict[str, Any]]:
-        """Query records based on filters."""
-        # Map generic field names to actual field names
-        actual_filters = self.field_mapping.map_filter(filters)
-        
+        query = query.lower()
         results = []
         
-        for record in self._records:
-            if len(results) >= limit:
-                break
+        for item in self.data:
+            # Simple search: check if query is in any field
+            score = 0
+            for field, value in item.items():
+                if not value:
+                    continue
                 
-            # Check if record matches all filters
-            if self._record_matches_filters(record, actual_filters):
-                results.append(record)
+                value_str = str(value).lower()
+                
+                # Exact match gets higher score
+                if query == value_str:
+                    score += 10
+                # Partial match gets lower score
+                elif query in value_str:
+                    score += 5
+                # Word match gets even lower score
+                elif any(word in value_str for word in query.split()):
+                    score += 1
+            
+            if score > 0:
+                result = self.map_fields(item.copy())
+                result['_score'] = score
+                results.append(result)
         
+        # Sort by score
+        results.sort(key=lambda x: x['_score'], reverse=True)
         return results
     
-    def _record_matches_filters(self, record: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    def get_by_id(self, item_id: str) -> Optional[Dict[str, Any]]:
         """
-        Check if a record matches the given filters.
+        Get an item by its ID.
         
         Args:
-            record: Record to check
-            filters: Filters to match against
+            item_id: The ID of the item to get
             
         Returns:
-            True if record matches all filters, False otherwise
+            The item if found, None otherwise
         """
-        for field, filter_value in filters.items():
-            # Skip fields not in record
-            if field not in record:
-                return False
-            
-            record_value = record[field]
-            
-            # Handle missing values
-            if record_value is None:
-                return False
-            
-            # Handle different filter types
-            if isinstance(filter_value, dict):
-                # Operator-based filter (e.g., {"gt": 10})
-                for op, op_value in filter_value.items():
-                    if not self._apply_operator(op, record_value, op_value):
-                        return False
-            else:
-                # Exact match
-                if record_value != filter_value:
-                    # Special case: string equality with case insensitivity
-                    if (isinstance(record_value, str) and 
-                        isinstance(filter_value, str) and 
-                        record_value.lower() == filter_value.lower()):
-                        continue
-                        
-                    return False
+        if self.field_mapping is None:
+            print("Error: Field mapping not set. Cannot determine ID field.")
+            return None
         
-        return True
-    
-    def _apply_operator(self, op: str, record_value: Any, op_value: Any) -> bool:
-        """
-        Apply a comparison operator.
+        id_field = self.field_mapping.get_source_field('id')
+        if not id_field:
+            print("Error: ID field not mapped in field mapping.")
+            return None
         
-        Args:
-            op: Operator name ('gt', 'lt', etc.)
-            record_value: Value from the record
-            op_value: Value to compare against
-            
-        Returns:
-            Result of comparison
-        """
-        # Handle type conversion for numeric comparisons
-        if op in ["gt", "gte", "lt", "lte"]:
-            # Try to convert string values to numbers for comparison
-            if isinstance(record_value, str) and not isinstance(op_value, str):
-                try:
-                    if '.' in record_value:
-                        record_value = float(record_value)
-                    else:
-                        record_value = int(record_value)
-                except ValueError:
-                    # If conversion fails, always return False for numeric comparisons
-                    return False
-            elif isinstance(op_value, str) and not isinstance(record_value, str):
-                try:
-                    if '.' in op_value:
-                        op_value = float(op_value)
-                    else:
-                        op_value = int(op_value)
-                except ValueError:
-                    return False
+        for item in self.data:
+            if str(item.get(id_field, '')) == str(item_id):
+                return self.map_fields(item.copy())
         
-        # Now perform the comparison
-        if op == "gt":
-            return record_value > op_value
-        elif op == "gte":
-            return record_value >= op_value
-        elif op == "lt":
-            return record_value < op_value
-        elif op == "lte":
-            return record_value <= op_value
-        elif op == "contains" and isinstance(record_value, str):
-            return str(op_value).lower() in record_value.lower()
-        else:
-            return False
-    
-    def get_text_for_vector_search(self, record: Dict[str, Any], field_weights: Dict[str, float]) -> str:
-        """Convert a record to text for vector search."""
-        text_parts = []
-        
-        # Prioritize the job name field
-        job_name_field = self.field_mapping.name_field
-        
-        if job_name_field in record and record[job_name_field] is not None:
-            job_name = str(record[job_name_field])
-            
-            # Add with special prefix for exact matching
-            text_parts.append(f"job_name:{job_name}")
-            
-            # Add multiple repetitions for higher weight
-            weight = field_weights.get(job_name_field, 5.0)
-            for _ in range(int(weight)):
-                text_parts.append(job_name)
-            
-            # Add individual words from the job name
-            for word in job_name.split('_'):
-                if word:
-                    text_parts.extend([word] * 3)
-        
-        # Add other fields with lower weights
-        for field, value in record.items():
-            if field != job_name_field and value is not None:
-                weight = field_weights.get(field, field_weights.get('default', 1.0))
-                if weight > 0:
-                    text_parts.append(f"{field}:{value}")
-        
-        # Final text for vector search
-        result = " ".join(text_parts)
-        return result
-    
-    def _format_field_for_vector(self, field: str, value: Any) -> str:
-        """
-        Format a field value for vector search.
-        
-        Args:
-            field: Field name
-            value: Field value
-            
-        Returns:
-            Formatted string
-        """
-        # Format based on type
-        if isinstance(value, datetime.datetime):
-            formatted = value.strftime(self.date_format)
-            days_ago = (datetime.datetime.now() - value).days
-            return f"{field}:{formatted} {days_ago} days ago"
-        elif isinstance(value, (int, float)):
-            return f"{field}:{value}"
-        else:
-            return f"{field}:{value}"
-    
-    def prepare_for_output(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare a record for output."""
-        output = {}
-        
-        for field, value in record.items():
-            # Format datetime objects
-            if isinstance(value, datetime.datetime):
-                output[field] = value.strftime(self.date_format)
-            # Handle None values
-            elif value is None:
-                output[field] = ""
-            # Pass through other values
-            else:
-                output[field] = value
-        
-        # Map field names to generic names
-        return self.field_mapping.reverse_map_record(output)
+        return None

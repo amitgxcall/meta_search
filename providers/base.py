@@ -1,98 +1,93 @@
 """
-Abstract data provider interface for the search system.
+Base data provider definition.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional
+from typing import List, Dict, Any, Optional
 
 class DataProvider(ABC):
     """
-    Abstract base class for data providers.
-    
-    Implement this class to provide data from different sources
-    (CSV, database, API, etc.) to the search system.
+    Abstract base class for all data providers.
+    Each provider should implement the necessary methods for its data source.
     """
     
-    @abstractmethod
-    def get_all_fields(self) -> List[str]:
+    def __init__(self, source_path: str):
         """
-        Get a list of all available fields/columns in the data.
-        
-        Returns:
-            List of field names
-        """
-        pass
-    
-    @abstractmethod
-    def get_record_count(self) -> int:
-        """
-        Get the total number of records in the data.
-        
-        Returns:
-            Integer count of records
-        """
-        pass
-    
-    @abstractmethod
-    def get_all_records(self) -> List[Dict[str, Any]]:
-        """
-        Get all records from the data source.
-        
-        Returns:
-            List of dictionaries representing records
-        """
-        pass
-    
-    @abstractmethod
-    def get_record_by_id(self, id_value: Any) -> Optional[Dict[str, Any]]:
-        """
-        Get a specific record by its ID.
+        Initialize the data provider.
         
         Args:
-            id_value: Value of the ID field
-            
+            source_path: Path to the data source
+        """
+        self.source_path = source_path
+        self.field_mapping = None
+        
+    def set_field_mapping(self, field_mapping) -> None:
+        """
+        Set the field mapping for this provider.
+        
+        Args:
+            field_mapping: FieldMapping object that maps standard field names to source-specific names
+        """
+        self.field_mapping = field_mapping
+        
+    @abstractmethod
+    def connect(self) -> bool:
+        """
+        Connect to the data source.
+        
         Returns:
-            Dictionary representing the record, or None if not found
+            True if connection successful, False otherwise
         """
         pass
     
     @abstractmethod
-    def query_records(self, filters: Dict[str, Any], limit: int = 100) -> List[Dict[str, Any]]:
+    def search(self, query: str) -> List[Dict[str, Any]]:
         """
-        Query records based on filters.
+        Search the data source.
         
         Args:
-            filters: Dictionary of field:value pairs to filter by
-            limit: Maximum number of records to return
+            query: The search query
             
         Returns:
-            List of dictionaries representing matching records
+            List of search results
         """
         pass
     
     @abstractmethod
-    def get_text_for_vector_search(self, record: Dict[str, Any], field_weights: Dict[str, float]) -> str:
+    def get_by_id(self, item_id: str) -> Optional[Dict[str, Any]]:
         """
-        Convert a record to text for vector search.
+        Get an item by its ID.
         
         Args:
-            record: Dictionary representing a record
-            field_weights: Dictionary of field:weight pairs
+            item_id: The ID of the item to get
             
         Returns:
-            String representation of the record for vector search
+            The item if found, None otherwise
         """
         pass
     
-    @abstractmethod
-    def prepare_for_output(self, record: Dict[str, Any]) -> Dict[str, Any]:
+    def map_fields(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Prepare a record for output (e.g., formatting dates, handling nulls).
+        Map fields from source-specific names to standard names.
         
         Args:
-            record: Dictionary representing a record
+            item: The item with source-specific field names
             
         Returns:
-            Formatted record dictionary
+            The item with standard field names
         """
-        pass
+        if self.field_mapping is None:
+            return item
+        
+        mapped_item = {}
+        
+        # Copy unmapped fields as-is
+        for key, value in item.items():
+            mapped_item[key] = value
+        
+        # Apply field mappings
+        for standard_name, source_name in self.field_mapping.get_mappings().items():
+            if source_name in item:
+                mapped_item[standard_name] = item[source_name]
+                
+        return mapped_item

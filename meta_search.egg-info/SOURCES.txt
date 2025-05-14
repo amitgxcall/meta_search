@@ -10,6 +10,11 @@ providers/csv_provider.py
 providers/hybrid_provider.py
 providers/json_provider.py
 providers/sqlite_provider.py
+query/__init__.py
+query/classification.py
+query/filters.py
+query/parser.py
+query/temporal.py
 search/__init__.py
 search/engine.py
 search/query_classifier.py
