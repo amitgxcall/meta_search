@@ -1,54 +1,158 @@
 """
 Vector search implementation for meta_search.
+
+This module provides vector-based similarity search functionality, which allows
+searching for items based on semantic similarity rather than exact matching.
+It supports both in-memory search and integration with more efficient libraries
+like FAISS for large-scale search.
+
+Example:
+    # Create a vector search engine
+    engine = VectorSearchEngine()
+    
+    # Add items to the index
+    engine.add_item('item1', {'name': 'Document 1'}, embedding_vector)
+    
+    # Search for similar items
+    results = engine.search(query_embedding)
 """
 
 import os
-import numpy as np
-from typing import List, Dict, Any, Optional, Tuple
-import json
 import pickle
+import numpy as np
+import logging
+from typing import List, Dict, Any, Optional, Tuple, Union, Callable
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Try to import FAISS for more efficient vector search
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+    logger.warning("FAISS not available. Using fallback numpy implementation.")
+
 
 class VectorSearchEngine:
     """
-    Vector-based search implementation using simple cosine similarity.
-    In a production environment, you might use specialized libraries 
-    like FAISS, Annoy, or ScaNN for more efficient similarity search.
+    Vector-based search implementation for semantic similarity search.
+    
+    This class provides functionality to search for items based on semantic
+    similarity using vector embeddings. It supports both a simple numpy-based
+    implementation and an optimized FAISS-based implementation when available.
+    
+    Attributes:
+        embedding_dim: Dimension of the embedding vectors
+        index: Dictionary mapping item IDs to embeddings (for numpy implementation)
+        id_to_data: Dictionary mapping item IDs to original data
+        faiss_index: FAISS index object (if FAISS is available)
+        id_list: List of item IDs (for FAISS implementation)
+        use_faiss: Whether to use FAISS for vector search
     """
     
-    def __init__(self, embedding_dim: int = 768):
+    def __init__(self, embedding_dim: int = 768, use_faiss: bool = True):
         """
         Initialize the vector search engine.
         
         Args:
             embedding_dim: Dimension of the embedding vectors
+            use_faiss: Whether to use FAISS for vector search (if available)
         """
         self.embedding_dim = embedding_dim
-        self.index = {}  # id -> embedding
+        self.index = {}  # id -> embedding (for numpy implementation)
         self.id_to_data = {}  # id -> original data
+        
+        # FAISS implementation (if available and requested)
+        self.faiss_index = None
+        self.id_list = []  # List of IDs for FAISS implementation
+        
+        # Use FAISS if available and requested
+        self.use_faiss = use_faiss and FAISS_AVAILABLE
+        
+        # Initialize FAISS index if available
+        if self.use_faiss:
+            self._init_faiss_index()
     
-    def add_item(self, item_id: str, item_data: Dict[str, Any], embedding: List[float]) -> None:
+    def _init_faiss_index(self) -> bool:
+        """
+        Initialize the FAISS index.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not FAISS_AVAILABLE:
+            return False
+        
+        try:
+            # Create a flat L2 index
+            self.faiss_index = faiss.IndexFlatIP(self.embedding_dim)
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing FAISS index: {e}")
+            self.use_faiss = False
+            return False
+    
+    def add_item(self, item_id: str, item_data: Dict[str, Any], embedding: Union[List[float], np.ndarray]) -> None:
         """
         Add an item to the vector index.
         
         Args:
             item_id: Unique identifier for the item
             item_data: Original item data
-            embedding: Vector embedding for the item
+            embedding: Vector embedding for the item (list or numpy array)
         """
-        # Convert to numpy array for efficient operations
-        embedding_array = np.array(embedding, dtype=np.float32)
+        # Convert to numpy array if needed
+        if not isinstance(embedding, np.ndarray):
+            embedding_array = np.array(embedding, dtype=np.float32)
+        else:
+            embedding_array = embedding.astype(np.float32)
         
         # Normalize the vector for cosine similarity
         norm = np.linalg.norm(embedding_array)
         if norm > 0:
             embedding_array = embedding_array / norm
         
-        self.index[item_id] = embedding_array
+        # Store the data
         self.id_to_data[item_id] = item_data
+        
+        # Store differently based on implementation
+        if self.use_faiss:
+            # Add to FAISS index
+            self.id_list.append(item_id)
+            self.faiss_index.add(embedding_array.reshape(1, -1))
+        else:
+            # Add to numpy index
+            self.index[item_id] = embedding_array
     
-    def search(self, query_embedding: List[float], limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
+    def search(self, 
+              query_embedding: Union[List[float], np.ndarray], 
+              limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
         """
         Search for similar items.
+        
+        Args:
+            query_embedding: Vector embedding for the query
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of tuples (item_id, similarity_score, item_data)
+        """
+        if self.use_faiss:
+            return self._search_faiss(query_embedding, limit)
+        else:
+            return self._search_numpy(query_embedding, limit)
+    
+    def _search_numpy(self, 
+                     query_embedding: Union[List[float], np.ndarray], 
+                     limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """
+        Search using numpy implementation.
         
         Args:
             query_embedding: Vector embedding for the query
@@ -60,8 +164,13 @@ class VectorSearchEngine:
         if not self.index:
             return []
         
-        # Convert to numpy array and normalize
-        query_array = np.array(query_embedding, dtype=np.float32)
+        # Convert to numpy array if needed
+        if not isinstance(query_embedding, np.ndarray):
+            query_array = np.array(query_embedding, dtype=np.float32)
+        else:
+            query_array = query_array.astype(np.float32)
+        
+        # Normalize the query vector
         norm = np.linalg.norm(query_array)
         if norm > 0:
             query_array = query_array / norm
@@ -78,6 +187,55 @@ class VectorSearchEngine:
         
         return results[:limit]
     
+    def _search_faiss(self, 
+                     query_embedding: Union[List[float], np.ndarray], 
+                     limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
+        """
+        Search using FAISS implementation.
+        
+        Args:
+            query_embedding: Vector embedding for the query
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of tuples (item_id, similarity_score, item_data)
+        """
+        if not self.faiss_index or not self.id_list:
+            return []
+        
+        # Limit to the actual number of items
+        k = min(limit, len(self.id_list))
+        if k == 0:
+            return []
+        
+        # Convert to numpy array if needed
+        if not isinstance(query_embedding, np.ndarray):
+            query_array = np.array(query_embedding, dtype=np.float32)
+        else:
+            query_array = query_embedding.astype(np.float32)
+        
+        # Normalize the query vector
+        norm = np.linalg.norm(query_array)
+        if norm > 0:
+            query_array = query_array / norm
+        
+        # Reshape for FAISS
+        query_array = query_array.reshape(1, -1)
+        
+        # Search with FAISS
+        distances, indices = self.faiss_index.search(query_array, k)
+        
+        # Format results
+        results = []
+        for i in range(len(indices[0])):
+            idx = indices[0][i]
+            similarity = float(distances[0][i])
+            item_id = self.id_list[idx]
+            item_data = self.id_to_data[item_id]
+            results.append((item_id, similarity, item_data))
+        
+        return results
+    
     def save_index(self, file_path: str) -> bool:
         """
         Save the vector index to disk.
@@ -91,16 +249,27 @@ class VectorSearchEngine:
         try:
             data = {
                 "embedding_dim": self.embedding_dim,
-                "index": {k: v.tolist() for k, v in self.index.items()},
-                "id_to_data": self.id_to_data
+                "id_to_data": self.id_to_data,
+                "use_faiss": self.use_faiss
             }
+            
+            if self.use_faiss:
+                # Save FAISS index to a separate file
+                faiss_path = file_path + ".faiss"
+                faiss.write_index(self.faiss_index, faiss_path)
+                data["faiss_path"] = faiss_path
+                data["id_list"] = self.id_list
+            else:
+                # Save numpy index
+                data["index"] = {k: v.tolist() for k, v in self.index.items()}
             
             with open(file_path, 'wb') as f:
                 pickle.dump(data, f)
             
+            logger.info(f"Vector index saved to {file_path}")
             return True
         except Exception as e:
-            print(f"Error saving index: {e}")
+            logger.error(f"Error saving vector index: {e}")
             return False
     
     def load_index(self, file_path: str) -> bool:
@@ -114,6 +283,7 @@ class VectorSearchEngine:
             True if successful, False otherwise
         """
         if not os.path.exists(file_path):
+            logger.warning(f"Vector index file not found: {file_path}")
             return False
         
         try:
@@ -121,14 +291,29 @@ class VectorSearchEngine:
                 data = pickle.load(f)
             
             self.embedding_dim = data["embedding_dim"]
-            self.index = {k: np.array(v, dtype=np.float32) for k, v in data["index"].items()}
             self.id_to_data = data["id_to_data"]
+            self.use_faiss = data.get("use_faiss", False) and FAISS_AVAILABLE
             
+            if self.use_faiss and "faiss_path" in data:
+                # Load FAISS index
+                faiss_path = data["faiss_path"]
+                if os.path.exists(faiss_path):
+                    self.faiss_index = faiss.read_index(faiss_path)
+                    self.id_list = data["id_list"]
+                else:
+                    logger.warning(f"FAISS index file not found: {faiss_path}")
+                    self.use_faiss = False
+            
+            if not self.use_faiss and "index" in data:
+                # Load numpy index
+                self.index = {k: np.array(v, dtype=np.float32) for k, v in data["index"].items()}
+            
+            logger.info(f"Vector index loaded from {file_path}")
             return True
         except Exception as e:
-            print(f"Error loading index: {e}")
+            logger.error(f"Error loading vector index: {e}")
             return False
-
+    
     @staticmethod
     def get_mock_embedding(text: str, dim: int = 768) -> List[float]:
         """
@@ -160,6 +345,52 @@ class VectorSearchEngine:
         embedding = embedding / np.linalg.norm(embedding)
         
         return embedding.tolist()
+    
+    def clear(self) -> None:
+        """
+        Clear the vector index.
+        """
+        self.index = {}
+        self.id_to_data = {}
+        
+        if self.use_faiss:
+            self.id_list = []
+            self._init_faiss_index()
+    
+    def get_item_count(self) -> int:
+        """
+        Get the number of items in the index.
+        
+        Returns:
+            Number of items
+        """
+        if self.use_faiss:
+            return len(self.id_list)
+        else:
+            return len(self.index)
+    
+    def get_index_size_bytes(self) -> int:
+        """
+        Get the approximate size of the index in bytes.
+        
+        Returns:
+            Size in bytes
+        """
+        import sys
+        
+        # Approximate size of id_to_data
+        data_size = sys.getsizeof(self.id_to_data)
+        
+        # Size of index depends on implementation
+        if self.use_faiss:
+            # FAISS doesn't expose size, so estimate based on dimensions
+            index_size = len(self.id_list) * self.embedding_dim * 4  # 4 bytes per float32
+        else:
+            # For numpy implementation, sum up the sizes of arrays
+            index_size = sum(sys.getsizeof(embedding) for embedding in self.index.values())
+        
+        return data_size + index_size
+
 
 # For backward compatibility
 VectorSearch = VectorSearchEngine

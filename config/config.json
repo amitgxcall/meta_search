@@ -1,0 +1,45 @@
+{
+    "provider_settings": {
+      "default_provider": "hybrid",
+      "csv": {
+        "delimiter": ",",
+        "quotechar": "\"",
+        "encoding": "utf-8"
+      },
+      "sqlite": {
+        "timeout": 5.0,
+        "detect_types": 0,
+        "isolation_level": null
+      },
+      "hybrid": {
+        "vector_weight": 0.5,
+        "text_fields": null,
+        "sequential": false
+      }
+    },
+    "search_settings": {
+      "max_results": 10,
+      "min_score": 0.0,
+      "sort_by": "_score",
+      "sort_order": "desc",
+      "exclude_fields": ["_internal", "_metadata"]
+    },
+    "field_weights": {
+      "name": 2.0,
+      "description": 1.5,
+      "status": 1.0,
+      "error_message": 1.0,
+      "default": 0.5
+    },
+    "cache_settings": {
+      "enabled": true,
+      "directory": "cache",
+      "ttl": 86400,
+      "max_size": 104857600
+    },
+    "logging": {
+      "level": "INFO",
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      "file": null
+    }
+  }
