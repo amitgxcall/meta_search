@@ -1,0 +1,8 @@
+field_mapping = FieldMapping(
+    id_field="document_id",
+    name_field="title",
+    status_field="state",
+    timestamp_fields=["created_date", "modified_date", "published_date"],
+    numeric_fields=["version", "page_count", "file_size", "view_count"],
+    text_fields=["content", "summary", "author", "tags", "category"]
+)

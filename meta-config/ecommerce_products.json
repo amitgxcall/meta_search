@@ -1,0 +1,8 @@
+pythonfield_mapping = FieldMapping(
+    id_field="sku",
+    name_field="product_name",
+    status_field="inventory_status",
+    timestamp_fields=["created_at", "updated_at", "last_ordered"],
+    numeric_fields=["price", "cost", "weight", "stock_level", "rating"],
+    text_fields=["description", "category", "brand", "tags", "features"]
+)

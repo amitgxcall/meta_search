@@ -1,0 +1,8 @@
+field_mapping = FieldMapping(
+    id_field="customer_id",
+    name_field="full_name",
+    status_field="account_status",
+    timestamp_fields=["registered_date", "last_login", "last_purchase"],
+    numeric_fields=["age", "lifetime_value", "order_count", "loyalty_points"],
+    text_fields=["email", "address", "notes", "preferences", "segment"]
+)

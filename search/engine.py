@@ -4,23 +4,24 @@ Search engine implementation for the meta_search system.
 This module provides the core search functionality, coordinating searches
 across multiple data providers and handling query parsing, execution, and
 result formatting.
-
-Example:
-    # Create a search engine
-    engine = SearchEngine()
-    
-    # Register data providers
-    engine.register_provider(csv_provider)
-    
-    # Execute a search
-    results = engine.search("failed database jobs")
 """
 
 import os
 import re
+import logging
 from typing import List, Dict, Any, Optional, Union, Callable, Tuple
+from datetime import datetime, timedelta
 
+# Import from base modules
 from ..providers.base import DataProvider
+from ..utils.field_mapping import FieldMapping
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 class SearchEngine:
@@ -58,6 +59,11 @@ class SearchEngine:
         # Register initial provider if provided
         if data_provider:
             self.register_provider(data_provider)
+        
+        # Set cache directory
+        self.cache_dir = cache_dir
+        if cache_dir and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
     
     def register_provider(self, provider: DataProvider) -> None:
         """
@@ -73,9 +79,9 @@ class SearchEngine:
         Search across all registered providers.
         
         This method handles various query types:
-        - ID-based queries (e.g., "job id 123")
-        - Counting queries (e.g., "how many failed jobs")
-        - Standard search queries (e.g., "failed database jobs")
+        - ID-based queries (e.g., "id 123")
+        - Counting queries (e.g., "how many items")
+        - Standard search queries (e.g., "important items")
         
         Args:
             query: The search query
@@ -84,6 +90,23 @@ class SearchEngine:
         Returns:
             List of search results or a dictionary with counting results
         """
+        # Check if this is an ID-based query
+        id_value = self.extract_id_from_query(query)
+        if id_value:
+            logger.info(f"Detected ID search for: {id_value}")
+            
+            # Try to get the item directly by ID from any provider
+            for provider in self.providers:
+                item = provider.get_by_id(id_value)
+                if item:
+                    # Return as a list with a single item
+                    item['_match_type'] = 'exact_id'
+                    item['_score'] = 1.0
+                    return [item]
+            
+            # If no exact match found, continue with standard search
+            logger.info(f"No exact match found for ID {id_value}, falling back to standard search")
+        
         # Check if this is a counting query
         if self.is_counting_query(query):
             return self._handle_counting_query(query)
@@ -92,7 +115,7 @@ class SearchEngine:
         results = []
         
         for provider in self.providers:
-            provider_results = provider.search(query)
+            provider_results = provider.search(query, limit=limit)
             results.extend(provider_results)
             
         # Sort results by relevance (if available)
@@ -100,6 +123,33 @@ class SearchEngine:
         
         # Limit the number of results
         return results[:limit]
+    
+    def extract_id_from_query(self, query: str) -> Optional[str]:
+        """
+        Extract an ID from a query if it appears to be an ID search.
+        
+        Args:
+            query: The search query
+            
+        Returns:
+            The ID string if found, None otherwise
+        """
+        # Pattern for "id X", "ID: X", "item id X", etc.
+        id_patterns = [
+            r'(?:^|\s)id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)item\s+id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)item[-_]id\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)#(\d+)',
+            r'(?:^|\s)number\s*[:=]?\s*(\d+)',
+            r'(?:^|\s)(\d{4,})\s*$'  # Standalone number (at least 4 digits)
+        ]
+        
+        for pattern in id_patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None
     
     def _handle_counting_query(self, query: str) -> Dict[str, Any]:
         """
@@ -126,19 +176,58 @@ class SearchEngine:
             provider_results = provider.search(search_query)
             all_results.extend(provider_results)
         
-        # Sort results by relevance (if available)
-        all_results.sort(key=lambda x: x.get('_score', 0), reverse=True)
+        # Apply additional filters
+        filtered_results = self.filter_results_by_criteria(all_results, filters)
+        
+        # Count by group if specified
+        count_by_field = None
+        if 'group by ' in query.lower():
+            # Extract the field to group by
+            match = re.search(r'group by\s+(\w+)', query.lower())
+            if match:
+                count_by_field = match.group(1)
         
         # Return counting result
-        return {
+        result = {
             "query_type": "counting",
             "query": query,
             "search_query": search_query,
-            "count": len(all_results),
+            "count": len(filtered_results),
             "count_target": count_target,
             "filters": filters,
-            "sample_results": all_results[:5] if all_results else []
+            "sample_results": filtered_results[:5] if filtered_results else []
         }
+        
+        # Add count by field if specified
+        if count_by_field:
+            result["count_by_field"] = count_by_field
+            result["count_by_value"] = self._count_by_field(filtered_results, count_by_field)
+        
+        return result
+    
+    def _count_by_field(self, results: List[Dict[str, Any]], field: str) -> Dict[str, int]:
+        """
+        Count results grouped by a field value.
+        
+        Args:
+            results: List of search results
+            field: Field to group by
+            
+        Returns:
+            Dictionary mapping field values to counts
+        """
+        counts = {}
+        
+        for result in results:
+            # Get the field value, using the mapped field if needed
+            value = str(result.get(field, 'unknown'))
+            
+            # Increment count
+            if value not in counts:
+                counts[value] = 0
+            counts[value] += 1
+        
+        return counts
     
     def is_counting_query(self, query: str) -> bool:
         """
@@ -197,9 +286,10 @@ class SearchEngine:
             if match:
                 return match.group(1).strip()
         
-        # Fallback: look for keywords related to jobs
-        job_related_words = ['job', 'jobs', 'task', 'tasks', 'process', 'processes']
-        for word in job_related_words:
+        # Fallback: look for keywords related to common items
+        common_items = ['item', 'items', 'record', 'records', 'entry', 'entries', 
+                       'document', 'documents', 'result', 'results']
+        for word in common_items:
             if word in query_lower:
                 return word
                 
@@ -259,23 +349,55 @@ class SearchEngine:
                     # Convert to dict if it's a simple value
                     filters[field] = {op_map[operator]: value}
         
-        # Extract special keywords
-        keyword_mapping = {
-            'failed': {'status': 'failed'},
-            'success': {'status': 'success'},
-            'running': {'status': 'running'},
-            'completed': {'status': 'completed'},
-            'pending': {'status': 'pending'},
-            'high': {'priority': 'high'},
-            'medium': {'priority': 'medium'},
-            'low': {'priority': 'low'},
-            'critical': {'priority': 'critical'}
-        }
+        # Extract temporal filters (e.g., "in the last 7 days")
+        temporal_filters = self.extract_temporal_filters(query)
+        if temporal_filters:
+            filters.update(temporal_filters)
         
+        return filters
+    
+    def extract_temporal_filters(self, query: str) -> Dict[str, Any]:
+        """
+        Extract temporal filters from the query.
+        
+        Args:
+            query: Query string
+            
+        Returns:
+            Dictionary of temporal filters
+        """
+        filters = {}
         query_lower = query.lower()
-        for keyword, filter_dict in keyword_mapping.items():
-            if re.search(r'\b' + keyword + r'\b', query_lower):
-                filters.update(filter_dict)
+        
+        # Check for "last X days/weeks/months/years" pattern
+        last_pattern = r'(?:in|from|within) the last (\d+)\s+(day|days|week|weeks|month|months|year|years)'
+        match = re.search(last_pattern, query_lower)
+        
+        if match:
+            amount = int(match.group(1))
+            unit = match.group(2)
+            
+            # Calculate start date
+            now = datetime.now()
+            
+            if unit in ['day', 'days']:
+                start_date = now - timedelta(days=amount)
+            elif unit in ['week', 'weeks']:
+                start_date = now - timedelta(weeks=amount)
+            elif unit in ['month', 'months']:
+                # Approximate months as 30 days
+                start_date = now - timedelta(days=30 * amount)
+            elif unit in ['year', 'years']:
+                # Approximate years as 365 days
+                start_date = now - timedelta(days=365 * amount)
+            
+            # Format as ISO string
+            start_date_str = start_date.isoformat()
+            
+            # Add to filters using generalized timestamp field (can be mapped by providers)
+            filters['timestamp'] = {'gte': start_date_str}
+            
+            logger.info(f"Extracted temporal filter: last {amount} {unit}, start date: {start_date_str}")
         
         return filters
     
@@ -307,11 +429,14 @@ class SearchEngine:
         for word in filler_words:
             search_query = re.sub(r'\b' + word + r'\b', '', search_query)
         
+        # Remove "group by" clause
+        search_query = re.sub(r'group by\s+\w+', '', search_query)
+        
         return search_query.strip()
     
     def filter_results_by_criteria(self, 
-                                 results: List[Dict[str, Any]], 
-                                 filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+                                  results: List[Dict[str, Any]], 
+                                  filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Filter results based on extracted criteria.
         
@@ -329,22 +454,33 @@ class SearchEngine:
         for result in results:
             match = True
             for field, value in filters.items():
-                if field in result:
+                # Handle results with nested structure
+                actual_field = field
+                if 'job_details' in result:
+                    current_result = result['job_details']
+                else:
+                    current_result = result
+                
+                # Check if field exists
+                if actual_field in current_result:
+                    field_value = current_result[actual_field]
+                    
                     # Handle different value types
                     if isinstance(value, dict):
                         # Operators (gt, lt, etc.)
                         for op, op_value in value.items():
-                            if not self._apply_operator(op, result[field], op_value):
+                            if not self._apply_operator(op, field_value, op_value):
                                 match = False
                                 break
                     else:
                         # Direct comparison
-                        if str(result[field]).lower() != str(value).lower():
+                        if str(field_value).lower() != str(value).lower():
                             # Try contains for text fields
-                            if not isinstance(value, str) or value.lower() not in str(result[field]).lower():
+                            if not isinstance(value, str) or value.lower() not in str(field_value).lower():
                                 match = False
                                 break
                 else:
+                    # Field not found in result
                     match = False
                     break
             
@@ -370,6 +506,7 @@ class SearchEngine:
             if isinstance(field_value, str) and field_value.replace('.', '', 1).isdigit():
                 field_value = float(field_value) if '.' in field_value else int(field_value)
             
+            # Handle timestamp comparisons
             if op == 'gt':
                 return field_value > op_value
             elif op == 'lt':
@@ -389,55 +526,6 @@ class SearchEngine:
         except (ValueError, TypeError):
             return False
     
-    def format_for_llm(self, 
-                      results: List[Dict[str, Any]], 
-                      query: str,
-                      id_field: str = 'id',
-                      name_field: str = 'name',
-                      status_field: Optional[str] = 'status') -> Dict[str, Any]:
-        """
-        Format search results for consumption by a language model.
-        
-        Args:
-            results: Search results
-            query: Original query
-            id_field: Field name for ID
-            name_field: Field name for name
-            status_field: Field name for status
-            
-        Returns:
-            Dictionary formatted for LLM consumption
-        """
-        # Import the result formatter (late import to avoid circular references)
-        try:
-            from ..search.results.formatter import format_for_llm
-            return format_for_llm(results, query, id_field, name_field, status_field)
-        except ImportError:
-            # Fallback to inline implementation
-            if not results:
-                return {
-                    "query": query,
-                    "result_count": 0,
-                    "results": [],
-                    "suggested_response": f"No results found for '{query}'."
-                }
-            
-            # Basic formatting
-            formatted_results = []
-            for r in results:
-                formatted_result = {}
-                for k, v in r.items():
-                    if not k.startswith('_'):
-                        formatted_result[k] = v
-                formatted_results.append(formatted_result)
-            
-            return {
-                "query": query,
-                "result_count": len(results),
-                "results": formatted_results,
-                "suggested_response": f"Found {len(results)} results for '{query}'."
-            }
-    
     def explain_search(self, query: str) -> Dict[str, Any]:
         """
         Explain how a query will be processed.
@@ -446,23 +534,20 @@ class SearchEngine:
             query: Search query
             
         Returns:
-            Dictionary with explanation
+            Dictionary with explanation details
         """
-        is_counting = self.is_counting_query(query)
-        filters = self.extract_filters(query)
-        
         explanation = {
             "query": query,
-            "is_counting_query": is_counting,
-            "filters": filters,
+            "is_id_search": self.extract_id_from_query(query) is not None,
+            "is_counting_query": self.is_counting_query(query),
+            "filters": self.extract_filters(query),
         }
         
-        if is_counting:
-            count_target = self.extract_count_target(query)
-            search_query = self.preprocess_counting_query(query)
-            explanation.update({
-                "count_target": count_target,
-                "search_query": search_query
-            })
+        if explanation["is_counting_query"]:
+            explanation["count_target"] = self.extract_count_target(query)
+            explanation["search_query"] = self.preprocess_counting_query(query)
+        
+        # Include temporal filters
+        explanation["temporal_filters"] = self.extract_temporal_filters(query)
         
         return explanation

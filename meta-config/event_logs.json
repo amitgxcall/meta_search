@@ -1,0 +1,8 @@
+field_mapping = FieldMapping(
+    id_field="event_id",
+    name_field="event_name",
+    status_field="severity",
+    timestamp_fields=["timestamp", "resolved_at"],
+    numeric_fields=["duration_ms", "affected_users", "retry_count"],
+    text_fields=["message", "source", "stack_trace", "component", "user_id"]
+)
