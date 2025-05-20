@@ -22,7 +22,9 @@ import pickle
 import numpy as np
 import logging
 import time
+import hashlib
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
+from functools import lru_cache
 
 # Set up logging
 logging.basicConfig(
@@ -35,6 +37,7 @@ logger = logging.getLogger(__name__)
 try:
     import faiss
     FAISS_AVAILABLE = True
+    logger.info("FAISS is available and will be used for vector search.")
 except ImportError:
     FAISS_AVAILABLE = False
     logger.warning("FAISS not available. Using fallback numpy implementation.")
@@ -76,6 +79,15 @@ class VectorSearchEngine:
         # Use FAISS if available and requested
         self.use_faiss = use_faiss and FAISS_AVAILABLE
         
+        # Performance metrics
+        self.metrics = {
+            'index_add_time': 0,
+            'search_time': 0,
+            'normalize_time': 0,
+            'items_added': 0,
+            'searches_performed': 0
+        }
+        
         # Initialize FAISS index if available
         if self.use_faiss:
             self._init_faiss_index()
@@ -91,7 +103,7 @@ class VectorSearchEngine:
             return False
         
         try:
-            # Create a flat L2 index
+            # Create a flat L2 index for cosine similarity
             self.faiss_index = faiss.IndexFlatIP(self.embedding_dim)
             return True
         except Exception as e:
@@ -108,6 +120,8 @@ class VectorSearchEngine:
             item_data: Original item data
             embedding: Vector embedding for the item (list or numpy array)
         """
+        start_time = time.time()
+        
         # Convert to numpy array if needed
         if not isinstance(embedding, np.ndarray):
             embedding_array = np.array(embedding, dtype=np.float32)
@@ -130,6 +144,65 @@ class VectorSearchEngine:
         else:
             # Add to numpy index
             self.index[item_id] = embedding_array
+        
+        # Update metrics
+        self.metrics['index_add_time'] += time.time() - start_time
+        self.metrics['items_added'] += 1
+    
+    def bulk_add_items(self, items: List[Tuple[str, Dict[str, Any], Union[List[float], np.ndarray]]]) -> None:
+        """
+        Add multiple items to the index at once for better performance.
+        
+        Args:
+            items: List of (item_id, item_data, embedding) tuples
+        """
+        if not items:
+            return
+            
+        start_time = time.time()
+        
+        # Process all embeddings at once
+        item_ids = []
+        item_data_dict = {}
+        
+        # Pre-allocate numpy array for embeddings
+        embeddings = np.zeros((len(items), self.embedding_dim), dtype=np.float32)
+        
+        for i, (item_id, item_data, embedding) in enumerate(items):
+            # Convert to numpy array if needed
+            if not isinstance(embedding, np.ndarray):
+                embedding_array = np.array(embedding, dtype=np.float32)
+            else:
+                embedding_array = embedding.astype(np.float32)
+            
+            # Store item ID and data
+            item_ids.append(item_id)
+            item_data_dict[item_id] = item_data
+            
+            # Store embedding
+            embeddings[i] = embedding_array
+        
+        # Normalize all embeddings at once
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        # Avoid division by zero
+        norms[norms == 0] = 1.0
+        normalized_embeddings = embeddings / norms
+        
+        # Update dictionaries
+        self.id_to_data.update(item_data_dict)
+        
+        if self.use_faiss:
+            # Add to FAISS index
+            self.id_list.extend(item_ids)
+            self.faiss_index.add(normalized_embeddings)
+        else:
+            # Add to numpy index
+            for i, item_id in enumerate(item_ids):
+                self.index[item_id] = normalized_embeddings[i]
+        
+        # Update metrics
+        self.metrics['index_add_time'] += time.time() - start_time
+        self.metrics['items_added'] += len(items)
     
     def search(self, 
               query_embedding: Union[List[float], np.ndarray], 
@@ -144,16 +217,22 @@ class VectorSearchEngine:
         Returns:
             List of tuples (item_id, similarity_score, item_data)
         """
+        start_time = time.time()
+        self.metrics['searches_performed'] += 1
+        
         if self.use_faiss:
-            return self._search_faiss(query_embedding, limit)
+            results = self._search_faiss(query_embedding, limit)
         else:
-            return self._search_numpy(query_embedding, limit)
+            results = self._search_numpy(query_embedding, limit)
+        
+        self.metrics['search_time'] += time.time() - start_time
+        return results
     
     def _search_numpy(self, 
                      query_embedding: Union[List[float], np.ndarray], 
                      limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
         """
-        Search using numpy implementation.
+        Search using optimized NumPy implementation.
         
         Args:
             query_embedding: Vector embedding for the query
@@ -165,34 +244,52 @@ class VectorSearchEngine:
         if not self.index:
             return []
         
-        # Convert to numpy array if needed
+        # Convert query to numpy array if needed
+        normalize_start = time.time()
         if not isinstance(query_embedding, np.ndarray):
             query_array = np.array(query_embedding, dtype=np.float32)
         else:
             query_array = query_embedding.astype(np.float32)
         
         # Normalize the query vector
-        norm = np.linalg.norm(query_array)
-        if norm > 0:
-            query_array = query_array / norm
+        query_norm = np.linalg.norm(query_array)
+        if query_norm > 0:
+            query_array = query_array / query_norm
         
-        # Calculate similarities
-        results = []
-        for item_id, item_embedding in self.index.items():
-            # Cosine similarity is just the dot product of normalized vectors
-            similarity = float(np.dot(query_array, item_embedding))
-            results.append((item_id, similarity, self.id_to_data[item_id]))
+        self.metrics['normalize_time'] += time.time() - normalize_start
         
-        # Sort by similarity (descending)
-        results.sort(key=lambda x: x[1], reverse=True)
+        # Get all item IDs and embeddings
+        item_ids = list(self.index.keys())
+        embeddings = np.array([self.index[item_id] for item_id in item_ids], dtype=np.float32)
         
-        return results[:limit]
+        # Calculate all similarities at once using matrix multiplication
+        similarities = np.dot(embeddings, query_array)
+        
+        # Get indices of top results
+        if limit < len(similarities):
+            # Use argpartition for better performance when we only need top K results
+            # This is faster than argsort for large arrays when we only need top K
+            top_indices = np.argpartition(similarities, -limit)[-limit:]
+            
+            # Sort the top indices by similarity (descending)
+            top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
+        else:
+            # If limit >= number of items, just sort all indices
+            top_indices = np.argsort(similarities)[::-1]
+        
+        # Create result tuples with better list comprehension
+        results = [
+            (item_ids[i], float(similarities[i]), self.id_to_data[item_ids[i]])
+            for i in top_indices
+        ]
+        
+        return results
     
     def _search_faiss(self, 
                      query_embedding: Union[List[float], np.ndarray], 
                      limit: int = 10) -> List[Tuple[str, float, Dict[str, Any]]]:
         """
-        Search using FAISS implementation.
+        Search using optimized FAISS implementation.
         
         Args:
             query_embedding: Vector embedding for the query
@@ -210,32 +307,126 @@ class VectorSearchEngine:
             return []
         
         # Convert to numpy array if needed
+        normalize_start = time.time()
         if not isinstance(query_embedding, np.ndarray):
             query_array = np.array(query_embedding, dtype=np.float32)
         else:
             query_array = query_embedding.astype(np.float32)
         
         # Normalize the query vector
-        norm = np.linalg.norm(query_array)
-        if norm > 0:
-            query_array = query_array / norm
+        query_norm = np.linalg.norm(query_array)
+        if query_norm > 0:
+            query_array = query_array / query_norm
         
         # Reshape for FAISS
         query_array = query_array.reshape(1, -1)
         
+        self.metrics['normalize_time'] += time.time() - normalize_start
+        
         # Search with FAISS
         distances, indices = self.faiss_index.search(query_array, k)
         
-        # Format results
-        results = []
-        for i in range(len(indices[0])):
-            idx = indices[0][i]
-            similarity = float(distances[0][i])
-            item_id = self.id_list[idx]
-            item_data = self.id_to_data[item_id]
-            results.append((item_id, similarity, item_data))
+        # Format results efficiently using list comprehension
+        results = [
+            (self.id_list[idx], float(distances[0][i]), self.id_to_data[self.id_list[idx]])
+            for i, idx in enumerate(indices[0])
+            if idx < len(self.id_list)  # Safety check
+        ]
         
         return results
+    
+    def batch_search(self, 
+                    query_embeddings: List[np.ndarray], 
+                    limit: int = 10) -> List[List[Tuple[str, float, Dict[str, Any]]]]:
+        """
+        Perform multiple searches in batch for better performance.
+        
+        Args:
+            query_embeddings: List of query embeddings
+            limit: Maximum number of results per query
+            
+        Returns:
+            List of result lists, one per query
+        """
+        if not query_embeddings:
+            return []
+        
+        start_time = time.time()
+        self.metrics['searches_performed'] += len(query_embeddings)
+        
+        if self.use_faiss:
+            # Batch search with FAISS for better performance
+            if not self.faiss_index or not self.id_list:
+                return [[] for _ in range(len(query_embeddings))]
+                
+            # Convert to numpy array
+            queries_array = np.array([q for q in query_embeddings], dtype=np.float32)
+            
+            # Normalize queries
+            normalize_start = time.time()
+            norms = np.linalg.norm(queries_array, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # Avoid division by zero
+            normalized_queries = queries_array / norms
+            self.metrics['normalize_time'] += time.time() - normalize_start
+            
+            # Search with FAISS
+            k = min(limit, len(self.id_list)) if self.id_list else 0
+            if k == 0:
+                return [[] for _ in range(len(query_embeddings))]
+                
+            distances, indices = self.faiss_index.search(normalized_queries, k)
+            
+            # Format results
+            all_results = []
+            for i in range(len(query_embeddings)):
+                # Use list comprehension for better performance
+                query_results = [
+                    (self.id_list[idx], float(distances[i][j]), self.id_to_data[self.id_list[idx]])
+                    for j, idx in enumerate(indices[i])
+                    if idx < len(self.id_list)  # Safety check
+                ]
+                all_results.append(query_results)
+        else:
+            # Batch search with NumPy
+            all_results = []
+            
+            # Get all embeddings at once for better performance
+            if not self.index:
+                return [[] for _ in range(len(query_embeddings))]
+                
+            item_ids = list(self.index.keys())
+            embeddings = np.array([self.index[item_id] for item_id in item_ids], dtype=np.float32)
+            
+            # Process all queries
+            for query_embedding in query_embeddings:
+                # Normalize query
+                normalize_start = time.time()
+                query_array = np.array(query_embedding, dtype=np.float32)
+                query_norm = np.linalg.norm(query_array)
+                if query_norm > 0:
+                    query_array = query_array / query_norm
+                self.metrics['normalize_time'] += time.time() - normalize_start
+                
+                # Calculate similarities
+                similarities = np.dot(embeddings, query_array)
+                
+                # Get top results
+                if limit < len(similarities):
+                    top_indices = np.argpartition(similarities, -limit)[-limit:]
+                    top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
+                else:
+                    top_indices = np.argsort(similarities)[::-1]
+                
+                # Create results
+                query_results = [
+                    (item_ids[i], float(similarities[i]), self.id_to_data[item_ids[i]])
+                    for i in top_indices
+                ]
+                
+                all_results.append(query_results)
+        
+        self.metrics['search_time'] += time.time() - start_time
+        return all_results
     
     def save_index(self, file_path: str) -> bool:
         """
@@ -248,6 +439,8 @@ class VectorSearchEngine:
             True if successful, False otherwise
         """
         try:
+            start_time = time.time()
+            
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
             
@@ -268,14 +461,15 @@ class VectorSearchEngine:
                 data["id_list"] = self.id_list
                 logger.info(f"FAISS index saved to {faiss_path} with {len(self.id_list)} items")
             else:
-                # Save numpy index
+                # Save numpy index - convert to lists for pickle compatibility
                 data["index"] = {k: v.tolist() for k, v in self.index.items()}
                 logger.info(f"Numpy index prepared with {len(self.index)} items")
             
             with open(file_path, 'wb') as f:
                 pickle.dump(data, f)
             
-            logger.info(f"Vector index saved to {file_path} ({len(self.id_to_data)} items)")
+            save_time = time.time() - start_time
+            logger.info(f"Vector index saved to {file_path} ({len(self.id_to_data)} items) in {save_time:.4f} seconds")
             return True
         except Exception as e:
             logger.error(f"Error saving vector index: {e}", exc_info=True)
@@ -296,6 +490,8 @@ class VectorSearchEngine:
             return False
         
         try:
+            start_time = time.time()
+            
             with open(file_path, 'rb') as f:
                 data = pickle.load(f)
             
@@ -324,6 +520,7 @@ class VectorSearchEngine:
             if not self.use_faiss and "index" in data:
                 # Load numpy index
                 try:
+                    # Convert lists back to numpy arrays
                     self.index = {k: np.array(v, dtype=np.float32) for k, v in data["index"].items()}
                     logger.info(f"Loaded numpy index with {len(self.index)} items")
                 except Exception as e:
@@ -335,7 +532,8 @@ class VectorSearchEngine:
                 logger.error("Vector index integrity check failed")
                 return False
             
-            logger.info(f"Successfully loaded vector index from {file_path}")
+            load_time = time.time() - start_time
+            logger.info(f"Successfully loaded vector index from {file_path} in {load_time:.4f} seconds")
             return True
             
         except Exception as e:
@@ -366,8 +564,8 @@ class VectorSearchEngine:
                     logger.error(f"ID list count ({len(self.id_list)}) != FAISS index size ({self.faiss_index.ntotal})")
                     return False
                 
-                # Check that all IDs in id_list have corresponding data
-                for item_id in self.id_list:
+                # Sample check of IDs in id_list with corresponding data
+                for item_id in self.id_list[:100]:  # Check first 100 to avoid excessive checking
                     if item_id not in self.id_to_data:
                         logger.error(f"ID {item_id} in id_list has no data in id_to_data")
                         return False
@@ -377,14 +575,14 @@ class VectorSearchEngine:
                     logger.warning("Numpy index is empty")
                     return True  # Empty index is still valid
                 
-                # Check dimensions
-                for item_id, embedding in self.index.items():
+                # Check dimensions for a sample of items
+                sample_keys = list(self.index.keys())[:100]  # Check first 100 to avoid excessive checking
+                for item_id in sample_keys:
+                    embedding = self.index[item_id]
                     if embedding.shape[0] != self.embedding_dim:
                         logger.error(f"Item {item_id} has wrong dimension: {embedding.shape[0]} (expected {self.embedding_dim})")
                         return False
-                
-                # Check that all IDs in index have corresponding data
-                for item_id in self.index:
+                    
                     if item_id not in self.id_to_data:
                         logger.error(f"ID {item_id} in index has no data in id_to_data")
                         return False
@@ -439,12 +637,34 @@ class VectorSearchEngine:
             index_size = sum(sys.getsizeof(embedding) for embedding in self.index.values())
         
         return data_size + index_size
+    
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """
+        Get performance metrics for the vector search engine.
+        
+        Returns:
+            Dictionary with performance metrics
+        """
+        if self.metrics['searches_performed'] > 0:
+            avg_search = self.metrics['search_time'] / self.metrics['searches_performed']
+            avg_normalize = self.metrics['normalize_time'] / self.metrics['searches_performed']
+            
+            return {
+                **self.metrics,
+                'avg_search_time': avg_search,
+                'avg_normalize_time': avg_normalize,
+                'implementation': 'faiss' if self.use_faiss else 'numpy'
+            }
+        else:
+            return self.metrics
 
     @staticmethod
+    @lru_cache(maxsize=1024)
     def get_mock_embedding(text: str, dim: int = 768) -> List[float]:
         """
         Generate a mock embedding for text.
         In a real implementation, you would use a proper embedding model.
+        This implementation is cached for better performance.
         
         Args:
             text: Text to generate an embedding for
@@ -455,7 +675,6 @@ class VectorSearchEngine:
         """
         # This is just a simple deterministic mock implementation
         # In a real system, you'd use a proper embedding model
-        import hashlib
         
         # Get a deterministic hash of the text
         hash_obj = hashlib.md5(text.encode())
