@@ -303,8 +303,6 @@ class CSVProvider(DataProvider):
             if self.field_mapping.status_field:
                 field_weights[self.field_mapping.status_field] = 2.0
         
-        text_results = []
-        
         for item in self.data:
             score = 0
             matched_fields = []
@@ -334,18 +332,18 @@ class CSVProvider(DataProvider):
                 result['_score'] = score
                 result['_match_type'] = 'text'
                 result['_matched_fields'] = matched_fields
-                text_results.append(result)
+                results.append(result)
         
         # Sort by score - define key function once for efficiency
         def get_score(item):
             return item.get('_score', 0)
             
-        text_results.sort(key=get_score, reverse=True)
+        results.sort(key=get_score, reverse=True)
         
         search_time = time.time() - start_time
-        logger.info(f"Found {len(text_results)} results for text search in {search_time:.4f} seconds")
+        logger.info(f"Found {len(results)} results for text search in {search_time:.4f} seconds")
         
-        return text_results[:limit] if limit else text_results
+        return results[:limit] if limit else results
     
     def get_by_id(self, item_id: str) -> Optional[Dict[str, Any]]:
         """

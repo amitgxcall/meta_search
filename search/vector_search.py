@@ -5,16 +5,6 @@ This module provides vector-based similarity search functionality, which allows
 searching for items based on semantic similarity rather than exact matching.
 It supports both in-memory search and integration with more efficient libraries
 like FAISS for large-scale search.
-
-Example:
-    # Create a vector search engine
-    engine = VectorSearchEngine()
-    
-    # Add items to the index
-    engine.add_item('item1', {'name': 'Document 1'}, embedding_vector)
-    
-    # Search for similar items
-    results = engine.search(query_embedding)
 """
 
 import os
@@ -50,14 +40,6 @@ class VectorSearchEngine:
     This class provides functionality to search for items based on semantic
     similarity using vector embeddings. It supports both a simple numpy-based
     implementation and an optimized FAISS-based implementation when available.
-    
-    Attributes:
-        embedding_dim: Dimension of the embedding vectors
-        index: Dictionary mapping item IDs to embeddings (for numpy implementation)
-        id_to_data: Dictionary mapping item IDs to original data
-        faiss_index: FAISS index object (if FAISS is available)
-        id_list: List of item IDs (for FAISS implementation)
-        use_faiss: Whether to use FAISS for vector search
     """
     
     def __init__(self, embedding_dim: int = 768, use_faiss: bool = True):
@@ -565,7 +547,7 @@ class VectorSearchEngine:
                     return False
                 
                 # Sample check of IDs in id_list with corresponding data
-                for item_id in self.id_list[:100]:  # Check first 100 to avoid excessive checking
+                for item_id in self.id_list[:min(100, len(self.id_list))]:
                     if item_id not in self.id_to_data:
                         logger.error(f"ID {item_id} in id_list has no data in id_to_data")
                         return False
@@ -576,7 +558,7 @@ class VectorSearchEngine:
                     return True  # Empty index is still valid
                 
                 # Check dimensions for a sample of items
-                sample_keys = list(self.index.keys())[:100]  # Check first 100 to avoid excessive checking
+                sample_keys = list(self.index.keys())[:min(100, len(self.index))]
                 for item_id in sample_keys:
                     embedding = self.index[item_id]
                     if embedding.shape[0] != self.embedding_dim:
@@ -660,7 +642,7 @@ class VectorSearchEngine:
 
     @staticmethod
     @lru_cache(maxsize=1024)
-    def get_mock_embedding(text: str, dim: int = 768) -> List[float]:
+    def get_mock_embedding(text: str, dim: int = 768) -> np.ndarray:
         """
         Generate a mock embedding for text.
         In a real implementation, you would use a proper embedding model.
@@ -671,11 +653,8 @@ class VectorSearchEngine:
             dim: Dimension of the embedding
             
         Returns:
-            Vector embedding
+            Vector embedding (numpy array)
         """
-        # This is just a simple deterministic mock implementation
-        # In a real system, you'd use a proper embedding model
-        
         # Get a deterministic hash of the text
         hash_obj = hashlib.md5(text.encode())
         hash_bytes = hash_obj.digest()
@@ -689,7 +668,7 @@ class VectorSearchEngine:
         # Normalize to unit length
         embedding = embedding / np.linalg.norm(embedding)
         
-        return embedding.tolist()
+        return embedding
 
 
 # For backward compatibility

@@ -481,77 +481,68 @@ class HybridProvider(DataProvider):
         Returns:
             Combined results
         """
-        # Create a map of item IDs to items
-        all_items = {}
+        # Create sets of unique item IDs from both result sets
         id_field = self._get_id_field()
+        structured_ids = {str(item.get(id_field, '')) for item in structured_results}
+        vector_ids = {str(item.get(id_field, '')) for item in vector_results}
         
-        # Process structured results first
+        # Get all unique IDs
+        all_ids = list(structured_ids.union(vector_ids))
+        
+        # Use NumPy arrays for efficient operations
+        structured_scores = np.zeros(len(all_ids), dtype=np.float32)
+        vector_scores = np.zeros(len(all_ids), dtype=np.float32)
+        
+        # Create ID to index mapping
+        id_to_index = {item_id: i for i, item_id in enumerate(all_ids)}
+        id_to_item = {}
+        
+        # Fill score arrays and item map
         for item in structured_results:
-            if id_field in item:
-                item_id = str(item[id_field])
-                all_items[item_id] = {
-                    **item,
-                    "_structured_score": item.get("_score", 0),
-                    "_vector_score": 0,
-                    "_combined_score": 0
-                }
+            item_id = str(item.get(id_field, ''))
+            if item_id in id_to_index:
+                i = id_to_index[item_id]
+                structured_scores[i] = item.get('_score', 0)
+                id_to_item[item_id] = item
         
-        # Process vector results
         for item in vector_results:
-            if id_field in item:
-                item_id = str(item[id_field])
-                if item_id in all_items:
-                    # Update existing item
-                    all_items[item_id]["_vector_score"] = item.get("_score", 0)
-                else:
-                    # Add new item
-                    all_items[item_id] = {
-                        **item,
-                        "_structured_score": 0,
-                        "_vector_score": item.get("_score", 0),
-                        "_combined_score": 0
-                    }
-        
-        # Early return if no results
-        if not all_items:
-            return []
-        
-        # Use NumPy for score normalization and combination
-        item_ids = list(all_items.keys())
-        structured_scores = np.array([all_items[item_id]["_structured_score"] for item_id in item_ids], dtype=np.float32)
-        vector_scores = np.array([all_items[item_id]["_vector_score"] for item_id in item_ids], dtype=np.float32)
+            item_id = str(item.get(id_field, ''))
+            if item_id in id_to_index:
+                i = id_to_index[item_id]
+                vector_scores[i] = item.get('_score', 0)
+                if item_id not in id_to_item:
+                    id_to_item[item_id] = item
         
         # Normalize scores using NumPy operations
-        max_structured_score = np.max(structured_scores) if structured_scores.size > 0 else 1.0
-        max_vector_score = np.max(vector_scores) if vector_scores.size > 0 else 1.0
+        max_structured = np.max(structured_scores) if structured_scores.size > 0 and np.max(structured_scores) > 0 else 1.0
+        max_vector = np.max(vector_scores) if vector_scores.size > 0 and np.max(vector_scores) > 0 else 1.0
         
-        # Avoid division by zero
-        normalized_structured_scores = np.zeros_like(structured_scores)
-        normalized_vector_scores = np.zeros_like(vector_scores)
+        normalized_structured = structured_scores / max_structured
+        normalized_vector = vector_scores / max_vector
         
-        if max_structured_score > 0:
-            normalized_structured_scores = structured_scores / max_structured_score
+        # Calculate combined scores
+        combined_scores = (1 - hybrid_weight) * normalized_structured + hybrid_weight * normalized_vector
         
-        if max_vector_score > 0:
-            normalized_vector_scores = vector_scores / max_vector_score
+        # Use argsort to get indices of top scores
+        if limit < len(combined_scores):
+            top_indices = np.argpartition(combined_scores, -limit)[-limit:]
+            top_indices = top_indices[np.argsort(combined_scores[top_indices])[::-1]]
+        else:
+            top_indices = np.argsort(combined_scores)[::-1]
         
-        # Calculate combined scores in a vectorized operation
-        combined_scores = (1 - hybrid_weight) * normalized_structured_scores + hybrid_weight * normalized_vector_scores
+        # Create result list
+        results = []
+        for i in top_indices:
+            item_id = all_ids[i]
+            if item_id in id_to_item:
+                result = id_to_item[item_id].copy()
+                result['_structured_score'] = float(normalized_structured[i])
+                result['_vector_score'] = float(normalized_vector[i])
+                result['_combined_score'] = float(combined_scores[i])
+                result['_score'] = float(combined_scores[i])  # Update main score
+                results.append(result)
         
-        # Update all items with their combined scores
-        for i, item_id in enumerate(item_ids):
-            all_items[item_id]["_combined_score"] = float(combined_scores[i])
-            all_items[item_id]["_score"] = float(combined_scores[i])  # Update main score
-        
-        # Convert to list - using list comprehension for better performance
-        results = [all_items[item_id] for item_id in item_ids]
-        
-        # Use NumPy's argsort for efficient sorting
-        sorted_indices = np.argsort(combined_scores)[::-1]  # Descending order
-        sorted_results = [results[i] for i in sorted_indices]
-        
-        # Limit results
-        return sorted_results[:limit]
+        return results
     
     def get_by_id(self, item_id: str) -> Optional[Dict[str, Any]]:
         """

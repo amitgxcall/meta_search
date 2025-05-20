@@ -55,10 +55,6 @@ class SearchEngine:
     This class handles query parsing, execution, and result formatting.
     It supports various query types, including standard searches, counting
     queries, and ID-based searches.
-    
-    Attributes:
-        providers: List of registered data providers
-        field_weights: Dictionary of field weights for scoring
     """
     
     def __init__(self, data_provider: Optional[DataProvider] = None, cache_dir: Optional[str] = None):
@@ -505,9 +501,6 @@ class SearchEngine:
         if not filters:
             return results
         
-        # Use list comprehension for more efficient filtering
-        filtered_results = []
-        
         # Fast path for common case of single field-value match
         if len(filters) == 1 and isinstance(next(iter(filters.values())), str):
             field, value = next(iter(filters.items()))
@@ -520,6 +513,7 @@ class SearchEngine:
             ]
         
         # More complex filtering
+        filtered_results = []
         for result in results:
             match = True
             for field, value in filters.items():

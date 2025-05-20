@@ -4,20 +4,6 @@ Field mapping utilities for normalizing field names across different data source
 This module provides functionality to map standard field names to source-specific 
 field names, allowing the search system to work with different data sources that
 may use different naming conventions.
-
-Example:
-    # Create field mapping
-    mapping = FieldMapping()
-    
-    # Add mappings for standard fields
-    mapping.add_mapping('id', 'item_id')
-    mapping.add_mapping('name', 'title')
-    
-    # Get source field for a standard name
-    source_field = mapping.get_source_field('id')  # Returns 'item_id'
-    
-    # Use in data provider
-    provider.set_field_mapping(mapping)
 """
 
 import re
@@ -77,15 +63,6 @@ class FieldMapping:
     that may use different field naming conventions. It maintains a mapping
     from standard field names (used throughout the system) to source-specific
     field names (used in the actual data).
-    
-    Attributes:
-        mappings: Dictionary mapping standard names to source-specific names
-        id_field: Field name for the ID field in the source
-        name_field: Field name for the name field in the source
-        status_field: Field name for the status field in the source
-        timestamp_fields: Set of field names for timestamp fields
-        numeric_fields: Set of field names for numeric fields
-        text_fields: Set of field names for text fields
     """
     
     def __init__(self, 
@@ -248,9 +225,10 @@ class FieldMapping:
             for field_name, value in filter_dict.items()
         }
 
+    @lru_cache(maxsize=128)
     def get_field_type(self, field_name: str) -> str:
         """
-        Get the type of a field.
+        Get the type of a field with caching for better performance.
         
         Args:
             field_name: Name of the field
