@@ -2,13 +2,17 @@ import sqlite3
 import pandas as pd
 import os
 
+# Configuration - Hardcode your CSV file path here
+CSV_FILE_PATH = "logs.csv"  # Change this to your CSV file path
+
 class LogQueryEngine:
-    def __init__(self, csv_file_path):
+    def __init__(self, csv_file_path=None):
         """Initialize the query engine with a CSV file path."""
         self.conn = sqlite3.connect(':memory:')  # In-memory database
         self.cursor = self.conn.cursor()
-        self.csv_file_path = csv_file_path
+        self.csv_file_path = csv_file_path or CSV_FILE_PATH
         self.table_name = 'logs'
+        self.data_loaded = False
         
     def load_csv_data(self):
         """Load data from CSV into SQLite database."""
@@ -46,9 +50,13 @@ class LogQueryEngine:
         df.to_sql(self.table_name, self.conn, if_exists='replace', index=False)
         print(f"Loaded {len(df)} rows from {self.csv_file_path}")
         print("All text values have been trimmed of leading/trailing whitespace")
+        self.data_loaded = True
         
     def get_schema(self):
         """Get the schema of the logs table."""
+        if not self.data_loaded:
+            self.load_csv_data()
+            
         self.cursor.execute(f"PRAGMA table_info({self.table_name})")
         columns = self.cursor.fetchall()
         schema_info = []
@@ -59,6 +67,9 @@ class LogQueryEngine:
     
     def execute_query(self, query):
         """Execute a SQL query against the log data."""
+        if not self.data_loaded:
+            self.load_csv_data()
+            
         try:
             result = pd.read_sql_query(query, self.conn)
             return result
@@ -80,6 +91,9 @@ class LogQueryEngine:
                 - 'row_count': Number of rows returned (if successful)
                 - 'columns': List of column names (if successful)
         """
+        if not self.data_loaded:
+            self.load_csv_data()
+            
         try:
             # Execute the query
             result_df = pd.read_sql_query(sql_query, self.conn)
@@ -111,6 +125,9 @@ class LogQueryEngine:
         Returns:
             pandas.DataFrame or None: Query results or None if error occurred
         """
+        if not self.data_loaded:
+            self.load_csv_data()
+            
         try:
             return pd.read_sql_query(sql_query, self.conn)
         except Exception as e:
@@ -157,15 +174,12 @@ def show_about(query_engine):
 
 
 def main():
-    # Path to your CSV file
-    csv_file_path = input("Enter path to your log CSV file: ").strip()
-    
     try:
-        # Initialize the query engine and load data
-        query_engine = LogQueryEngine(csv_file_path)
-        query_engine.load_csv_data()
+        # Initialize the query engine (uses hardcoded CSV_FILE_PATH)
+        query_engine = LogQueryEngine()
         
-        print("\nLog Query Engine initialized. Enter SQL queries or type 'about' for help.")
+        print(f"Using CSV file: {query_engine.csv_file_path}")
+        print("Log Query Engine initialized. Enter SQL queries or type 'about' for help.")
         
         while True:
             # Get input from user
