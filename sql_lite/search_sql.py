@@ -65,6 +65,58 @@ class LogQueryEngine:
         except Exception as e:
             return f"Error executing query: {e}"
     
+    def run_sql(self, sql_query):
+        """
+        Execute SQL query and return results in a structured format.
+        
+        Args:
+            sql_query (str): The SQL query to execute
+            
+        Returns:
+            dict: Dictionary containing:
+                - 'success': Boolean indicating if query was successful
+                - 'data': DataFrame with results (if successful) or None
+                - 'error': Error message (if unsuccessful) or None
+                - 'row_count': Number of rows returned (if successful)
+                - 'columns': List of column names (if successful)
+        """
+        try:
+            # Execute the query
+            result_df = pd.read_sql_query(sql_query, self.conn)
+            
+            return {
+                'success': True,
+                'data': result_df,
+                'error': None,
+                'row_count': len(result_df),
+                'columns': list(result_df.columns) if not result_df.empty else []
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'data': None,
+                'error': str(e),
+                'row_count': 0,
+                'columns': []
+            }
+    
+    def run_sql_simple(self, sql_query):
+        """
+        Execute SQL query and return just the DataFrame (simpler version).
+        
+        Args:
+            sql_query (str): The SQL query to execute
+            
+        Returns:
+            pandas.DataFrame or None: Query results or None if error occurred
+        """
+        try:
+            return pd.read_sql_query(sql_query, self.conn)
+        except Exception as e:
+            print(f"Error executing query: {e}")
+            return None
+    
     def close(self):
         """Close the database connection."""
         if self.conn:
