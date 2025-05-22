@@ -15,8 +15,15 @@ class LogQueryEngine:
         if not os.path.exists(self.csv_file_path):
             raise FileNotFoundError(f"CSV file not found: {self.csv_file_path}")
             
-        # Read CSV with pandas to automatically detect types
+        # Read CSV with pandas
         df = pd.read_csv(self.csv_file_path)
+        
+        # Trim whitespace from all string/object columns
+        for column in df.columns:
+            if df[column].dtype == 'object':  # String columns
+                df[column] = df[column].astype(str).str.strip()
+                # Convert 'nan' strings back to actual NaN values
+                df[column] = df[column].replace('nan', pd.NA)
         
         # Create table with appropriate columns
         columns = []
@@ -38,6 +45,17 @@ class LogQueryEngine:
         # Insert data into the table
         df.to_sql(self.table_name, self.conn, if_exists='replace', index=False)
         print(f"Loaded {len(df)} rows from {self.csv_file_path}")
+        print("All text values have been trimmed of leading/trailing whitespace")
+        
+    def get_schema(self):
+        """Get the schema of the logs table."""
+        self.cursor.execute(f"PRAGMA table_info({self.table_name})")
+        columns = self.cursor.fetchall()
+        schema_info = []
+        for col in columns:
+            # Format: (id, name, type, notnull, default_value, pk)
+            schema_info.append(f"{col[1]} ({col[2]})")
+        return schema_info
     
     def execute_query(self, query):
         """Execute a SQL query against the log data."""
@@ -53,6 +71,39 @@ class LogQueryEngine:
             self.conn.close()
 
 
+def show_about(query_engine):
+    """Display information about the application and the loaded data."""
+    print("\n===== Log Query Engine =====")
+    print("A simple SQLite-based tool for querying log data from CSV files.")
+    print("All text values are automatically trimmed of leading/trailing whitespace.")
+    
+    print("\n-- Available Commands --")
+    print("  about             : Show this information")
+    print("  schema            : Show the schema of the loaded data")
+    print("  exit/quit         : Exit the application")
+    print("  Any valid SQL     : Execute SQL query against the log data")
+    
+    print("\n-- Sample Queries --")
+    print("  SELECT * FROM logs LIMIT 5")
+    print("  SELECT COUNT(*) FROM logs")
+    print("  SELECT DISTINCT column_name FROM logs")
+    
+    print("\n-- Currently Loaded Data --")
+    print(f"  File: {query_engine.csv_file_path}")
+    
+    # Get row count
+    result = query_engine.execute_query("SELECT COUNT(*) FROM logs")
+    if isinstance(result, pd.DataFrame):
+        row_count = result.iloc[0, 0]
+        print(f"  Rows: {row_count}")
+    
+    # Get schema info
+    print("\n-- Schema --")
+    schema = query_engine.get_schema()
+    for column in schema:
+        print(f"  {column}")
+
+
 def main():
     # Path to your CSV file
     csv_file_path = input("Enter path to your log CSV file: ").strip()
@@ -62,28 +113,35 @@ def main():
         query_engine = LogQueryEngine(csv_file_path)
         query_engine.load_csv_data()
         
-        print("\nLog Query Engine initialized. Enter SQL queries or 'exit' to quit.")
-        print("Example query: SELECT * FROM logs LIMIT 5")
+        print("\nLog Query Engine initialized. Enter SQL queries or type 'about' for help.")
         
         while True:
-            # Get SQL query from user
-            query = input("\nEnter SQL query: ").strip()
+            # Get input from user
+            user_input = input("\nEnter command or SQL query: ").strip()
             
-            if query.lower() in ('exit', 'quit'):
+            # Check for special commands
+            if user_input.lower() in ('exit', 'quit'):
                 break
-                
-            # Execute the query
-            result = query_engine.execute_query(query)
-            
-            # Display the result
-            if isinstance(result, pd.DataFrame):
-                if len(result) > 0:
-                    print(f"\nQuery returned {len(result)} rows:")
-                    print(result)
-                else:
-                    print("Query returned no results.")
+            elif user_input.lower() == 'about':
+                show_about(query_engine)
+            elif user_input.lower() == 'schema':
+                schema = query_engine.get_schema()
+                print("\nTable Schema:")
+                for column in schema:
+                    print(f"  {column}")
             else:
-                print(result)
+                # Execute as SQL query
+                result = query_engine.execute_query(user_input)
+                
+                # Display the result
+                if isinstance(result, pd.DataFrame):
+                    if len(result) > 0:
+                        print(f"\nQuery returned {len(result)} rows:")
+                        print(result)
+                    else:
+                        print("Query returned no results.")
+                else:
+                    print(result)
         
     except Exception as e:
         print(f"Error: {e}")
