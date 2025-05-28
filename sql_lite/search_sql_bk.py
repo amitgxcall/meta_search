@@ -23,8 +23,8 @@ class LogQueryEngine:
         if col_name_lower.endswith('count') or col_name_lower.startswith('count'):
             return 'INTEGER'
         
-        # Handle datetime columns - columns ending with _dt
-        if col_name_lower.endswith('_dt'):
+        # Handle datetime columns - columns ending with _dt or _at
+        if col_name_lower.endswith('_dt') or col_name_lower.endswith('_at'):
             return 'TIMESTAMP'
         
         # Handle other datetime-like column names
@@ -122,7 +122,8 @@ class LogQueryEngine:
                 processed_columns.append(f"{column} (processed as count/integer)")
             
             # Process datetime columns
-            elif col_name_lower.endswith('_dt') or any(indicator in col_name_lower for indicator in ['date', 'time', 'timestamp']):
+            elif (col_name_lower.endswith('_dt') or col_name_lower.endswith('_at') or 
+                  any(indicator in col_name_lower for indicator in ['date', 'time', 'timestamp'])):
                 original_dtype = df[column].dtype
                 df[column] = self._process_datetime_column(df[column], column)
                 if df[column].dtype != original_dtype:
@@ -166,7 +167,7 @@ class LogQueryEngine:
             # Add special indicators for our processed columns
             if col_name.lower().endswith('count') or col_name.lower().startswith('count'):
                 col_type += " [COUNT]"
-            elif col_name.lower().endswith('_dt'):
+            elif col_name.lower().endswith('_dt') or col_name.lower().endswith('_at'):
                 col_type += " [DATETIME]"
             
             schema_info.append(f"{col_name} ({col_type})")
@@ -254,7 +255,7 @@ def show_about(query_engine):
     print("All text values are automatically trimmed of leading/trailing whitespace.")
     print("Special column processing:")
     print("  - Columns ending with 'count' or starting with 'count' → INTEGER")
-    print("  - Columns ending with '_dt' → TIMESTAMP (datetime)")
+    print("  - Columns ending with '_dt' or '_at' → TIMESTAMP (datetime)")
     
     print("\n-- Available Commands --")
     print("  about             : Show this information")
@@ -268,6 +269,7 @@ def show_about(query_engine):
     print("  SELECT DISTINCT column_name FROM logs")
     print("  SELECT * FROM logs WHERE some_count > 0")
     print("  SELECT * FROM logs WHERE some_dt > '2024-01-01'")
+    print("  SELECT * FROM logs WHERE created_at > '2024-01-01'")
     
     print("\n-- Currently Loaded Data --")
     print(f"  File: {query_engine.csv_file_path}")
